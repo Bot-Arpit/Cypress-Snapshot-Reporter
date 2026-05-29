@@ -1,0 +1,64 @@
+{
+  "name": "cypress-pixelmatch",
+  "version": "1.0.0",
+  "description": "Cypress plugin for visual pixelmatch testing with pixel-level diff, OCR, severity classification, and Excel + Mochawesome reporting. Works fully offline.",
+  "main": "plugin.js",
+  "exports": {
+    ".":          "./plugin.js",
+    "./plugin":   "./plugin.js",
+    "./commands": "./commands.js"
+  },
+  "files": [
+    "plugin.js",
+    "commands.js",
+    "src/tasks/constants.js",
+    "src/tasks/snapshotTasks.js",
+    "src/tasks/ocrTasks.js",
+    "src/tessdata/eng.traineddata.gz",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepublishOnly": "node -e \"const fs=require('fs'); if(!fs.existsSync('src/tessdata/eng.traineddata.gz')) throw new Error('Missing: src/tessdata/eng.traineddata.gz'); console.log('Publishing cypress-snapshot-reporter v' + require('./package.json').version);\""
+  },
+  "keywords": [
+    "cypress",
+    "snapshot",
+    "visual-regression",
+    "screenshot",
+    "pixelmatch",
+    "ocr",
+    "tesseract",
+    "excel",
+    "mochawesome",
+    "diff",
+    "reporter"
+  ],
+  "author": "Arpit Kumar",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arpit-kumar/cypress-snapshot-reporter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arpit-kumar/cypress-snapshot-reporter/issues"
+  },
+  "homepage": "https://github.com/arpit-kumar/cypress-snapshot-reporter#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "peerDependencies": {
+    "cypress": ">=13.0.0",
+    "cypress-mochawesome-reporter": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "cypress": { "optional": false },
+    "cypress-mochawesome-reporter": { "optional": true }
+  },
+  "dependencies": {
+    "exceljs":      "^4.4.0",
+    "pixelmatch":   "5.3.0",
+    "pngjs":        "^7.0.0",
+    "tesseract.js": "^7.0.0"
+  }
+}
