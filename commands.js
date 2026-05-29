@@ -10,6 +10,8 @@
  *   threshold  {number}   0–1 pixelmatch sensitivity    default: 0.1
  *   failOnDiff {boolean}  fail test on pixel diff       default: false
  *   runOcr     {boolean}  run OCR + write Excel on diff default: true
+ *   updateBaseline {boolean} auto-promote actual -> baseline after compare
+ *   diffDir        {string}  custom diff folder for reporter context links
  */
 
 /** Safe wrapper — only calls cy.addTestContext when cypress-mochawesome-reporter is loaded. */
@@ -19,10 +21,18 @@ function addContext(title, value) {
   }
 }
 
+function toReportPath(baseDir, snapshotName) {
+  const base = String(baseDir || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const name = String(snapshotName || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  return `${base}/${name}.png`;
+}
+
 Cypress.Commands.add("matchSnapshot", (name, options = {}) => {
-  const threshold  = options.threshold  ?? Cypress.env("snapshotThreshold")  ?? 0.1;
-  const failOnDiff = options.failOnDiff ?? Cypress.env("failOnSnapshotDiff") ?? false;
-  const runOcr     = options.runOcr     ?? true;
+  const threshold          = options.threshold      ?? Cypress.env("snapshotThreshold")     ?? 0.1;
+  const failOnDiff         = options.failOnDiff     ?? Cypress.env("failOnSnapshotDiff")    ?? false;
+  const runOcr             = options.runOcr          ?? true;
+  const autoUpdateBaseline = options.updateBaseline  ?? Cypress.env("snapshotUpdateBaseline") ?? false;
+  const diffDir            = options.diffDir         ?? Cypress.env("snapshotDiffDir")       ?? "cypress/snapshots/diff";
 
   cy.screenshot(name, { capture: "fullPage", overwrite: true }).then(() => {
     cy.task("compareSnapshot", { name, threshold }).then((result) => {
@@ -48,7 +58,9 @@ Cypress.Commands.add("matchSnapshot", (name, options = {}) => {
         );
       }
 
-      if (result.status === "compared" && result.mismatch > 0) {
+      const hasRealDiff = result.status === "compared" && result.mismatch > 0;
+
+      if (hasRealDiff) {
 
         addContext(
           `Severity: ${result.severity}`,
@@ -57,11 +69,14 @@ Cypress.Commands.add("matchSnapshot", (name, options = {}) => {
 
         addContext(
           "Pixel Diff Image  [ Baseline | Diff | Actual ]",
-          `cypress/snapshots/diff/${name}.png`
+          toReportPath(diffDir, name)
         );
+      }
 
-        if (runOcr) {
-          cy.task("ocrDiffRegions", {
+      let chain = cy.wrap(null, { log: false });
+
+      if (hasRealDiff && runOcr) {
+        chain = chain.then(() => cy.task("ocrDiffRegions", {
             name,
             mismatch:    result.mismatch,
             totalPixels: result.totalPixels,
@@ -85,16 +100,30 @@ Cypress.Commands.add("matchSnapshot", (name, options = {}) => {
             } else {
               addContext("OCR skipped", ocrResult.status);
             }
-          });
-        }
+          }));
+      }
 
-        if (failOnDiff) {
+      const shouldAutoUpdate = autoUpdateBaseline && (
+        result.status === "matched" ||
+        result.status === "noise_ignored" ||
+        result.status === "compared"
+      );
+
+      if (shouldAutoUpdate) {
+        chain = chain.then(() => cy.task("updateBaseline", { name }).then(() => {
+          cy.log(`[snapshot] baseline updated for ${name}`);
+          addContext("Snapshot", `Baseline updated for: ${name}`);
+        }));
+      }
+
+      return chain.then(() => {
+        if (hasRealDiff && failOnDiff) {
           throw new Error(
             `[${result.severity}] Snapshot mismatch for "${name}": ${result.mismatchPercent} pixels differ. ` +
             `See Mochawesome report for diff image and OCR details.`
           );
         }
-      }
+      });
     });
   });
 });

@@ -28,13 +28,13 @@ npm install --save-dev cypress-snapshot-reporter
 
 ```js
 const { defineConfig } = require("cypress");
-const { addPlugin }    = require("cypress-snapshot-reporter/plugin");
+const { configSnapshot } = require("cypress-snapshot-reporter/plugin");
 
 module.exports = defineConfig({
   screenshotsFolder: "cypress/snapshots/actual",
   e2e: {
     setupNodeEvents(on, config) {
-      addPlugin(on, config);
+      configSnapshot(on, config);
       return config;
     },
   },
@@ -57,18 +57,19 @@ cy.matchSnapshot("ReportName/SectionName_2025-07-31");
 
 That single line:
 1. Takes a full-page screenshot → `cypress/snapshots/actual/`
-2. On first run: saves to `cypress/snapshots/baseline/` (no diff)
+2. On first run: saves to `cypress/snapshots/baseline/` (no diff), keeps `actual`
 3. On subsequent runs: diffs against baseline using pixelmatch
 4. If diff found: writes side-by-side PNG to `cypress/snapshots/diff/`
-5. Runs OCR on each changed region → compares baseline vs actual text
-6. Appends results to `cypress/snapshots/reports/diff-report.xlsx`
-7. Attaches severity + diff image + OCR text to Mochawesome report
+5. If no diff/noise-only: no diff image is kept for that snapshot
+6. Runs OCR on each changed region → compares baseline vs actual text
+7. Appends results to `cypress/snapshots/reports/diff-report.xlsx`
+8. Attaches severity + diff image + OCR text to Mochawesome report
 
 ---
 
 ## Options
 
-### `addPlugin(on, config, options?)`
+### `configSnapshot(on, config, options?)`
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -76,15 +77,17 @@ That single line:
 | `actualDir` | string | `cypress/snapshots/actual` | Where run screenshots are saved |
 | `diffDir` | string | `cypress/snapshots/diff` | Where diff composites are written |
 | `excelFile` | string | `cypress/snapshots/reports/diff-report.xlsx` | Excel report path |
+| `updateBaseline` | boolean | `false` | Auto-promote `actual` to baseline after compare |
 | `browserWidth` | number | `6400` | Electron window width |
 | `browserHeight` | number | `4400` | Electron window height |
 
 ```js
-addPlugin(on, config, {
+configSnapshot(on, config, {
   baselineDir:   "tests/snapshots/baseline",
   actualDir:     "tests/snapshots/actual",
   diffDir:       "tests/snapshots/diff",
   excelFile:     "reports/visual-diff.xlsx",
+  updateBaseline: false,
   browserWidth:  1920,
   browserHeight: 1080,
 });
@@ -97,6 +100,8 @@ addPlugin(on, config, {
 | `threshold` | number | `0.1` | Pixelmatch sensitivity (0–1). Lower = more sensitive |
 | `failOnDiff` | boolean | `false` | Fail the test when pixels differ |
 | `runOcr` | boolean | `true` | Run OCR + write Excel when diff is found |
+| `updateBaseline` | boolean | `false` | Auto-promote current actual to baseline after compare |
+| `diffDir` | string | from plugin options | Diff image path used in reporter context |
 
 ```js
 cy.matchSnapshot("Overview_2025-07-31", {

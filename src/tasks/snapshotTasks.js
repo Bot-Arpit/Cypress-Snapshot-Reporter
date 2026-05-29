@@ -13,6 +13,10 @@ function ensureDir(filePath) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+function removeIfExists(filePath) {
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+}
+
 /**
  * Copies one PNG object's pixels into a destination PNG at a given x offset.
  */
@@ -172,7 +176,7 @@ function compareSnapshot({ name, threshold = PIXELMATCH_OPTIONS.threshold, BASEL
   if (!fs.existsSync(baselinePath)) {
     ensureDir(baselinePath);
     fs.copyFileSync(actualPath, baselinePath);
-    fs.unlinkSync(actualPath);
+    removeIfExists(diffPath);
     return { status: "baseline_created", name };
   }
 
@@ -180,6 +184,7 @@ function compareSnapshot({ name, threshold = PIXELMATCH_OPTIONS.threshold, BASEL
   const img2 = PNG.sync.read(fs.readFileSync(actualPath));
 
   if (img1.width !== img2.width || img1.height !== img2.height) {
+    removeIfExists(diffPath);
     return {
       status:   "size_mismatch",
       name,
@@ -198,11 +203,13 @@ function compareSnapshot({ name, threshold = PIXELMATCH_OPTIONS.threshold, BASEL
 
   // Images are identical — return early with a clean "matched" status
   if (mismatch === 0) {
+    removeIfExists(diffPath);
     return { status: "matched", name, mismatch: 0, mismatchPercent: "0.0000%" };
   }
 
   // Suppress rendering noise — only treat as a real diff if enough pixels differ
   if (mismatch < MIN_MISMATCH_PIXELS) {
+    removeIfExists(diffPath);
     return { status: "noise_ignored", name, mismatch, mismatchPercent: "< noise threshold" };
   }
 

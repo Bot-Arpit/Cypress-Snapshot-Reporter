@@ -5,23 +5,24 @@
  *
  * Usage in cypress.config.js:
  *
- *   const { addPlugin } = require("cypress-snapshot-reporter/plugin");
+ *   const { configSnapshot } = require("cypress-snapshot-reporter/plugin");
  *
  *   setupNodeEvents(on, config) {
- *     addPlugin(on, config);          // all defaults
+ *     configSnapshot(on, config);          // all defaults
  *     // or with custom options:
- *     addPlugin(on, config, {
+ *     configSnapshot(on, config, {
  *       baselineDir:  "cypress/snapshots/baseline",
  *       actualDir:    "cypress/snapshots/actual",
  *       diffDir:      "cypress/snapshots/diff",
  *       excelFile:    "cypress/snapshots/reports/diff-report.xlsx",
+ *       updateBaseline: false,
  *       browserWidth:  6400,
  *       browserHeight: 4400,
  *     });
  *     return config;
  *   }
  */
-function addPlugin(on, config, options = {}) {
+function configSnapshot(on, config, options = {}) {
   // Resolve task modules with options injected
   const { makeSnapshotTasks } = require("./src/tasks/snapshotTasks");
   const { makeOcrTasks }      = require("./src/tasks/ocrTasks");
@@ -45,6 +46,16 @@ function addPlugin(on, config, options = {}) {
     ocrDiffRegions:   ocrTasks.ocrDiffRegions,
   });
 
+  // Expose plugin-level defaults to browser-side commands.js via Cypress.env().
+  // Command-level options can still override these per call.
+  config.env = config.env || {};
+  if (config.env.snapshotUpdateBaseline === undefined) {
+    config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
+  }
+  if (config.env.snapshotDiffDir === undefined) {
+    config.env.snapshotDiffDir = options.diffDir || "cypress/snapshots/diff";
+  }
+
   const browserWidth  = options.browserWidth  || 6400;
   const browserHeight = options.browserHeight || 4400;
 
@@ -59,4 +70,4 @@ function addPlugin(on, config, options = {}) {
   return config;
 }
 
-module.exports = { addPlugin };
+module.exports = { configSnapshot };
