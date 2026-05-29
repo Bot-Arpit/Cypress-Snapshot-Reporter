@@ -1,7 +1,7 @@
 const fs      = require("fs");
 const path    = require("path");
 const { PNG } = require("pngjs");
-const ExcelJS = require("exceljs");
+const XlsxPopulate = require("xlsx-populate");
 const { COMPOSITE_SEP } = require("./constants"); // single source of truth
 
 const DEFAULT_BASELINE_DIR = "cypress/snapshots/baseline";
@@ -27,7 +27,6 @@ const MIN_REGION_AREA = 100;
 // model on every snapshot diff.
 
 let _tesseractWorker     = null;
-let _tesseractWorkerBusy = false;
 
 async function getWorker() {
   if (_tesseractWorker) return _tesseractWorker;
@@ -254,89 +253,109 @@ const SEVERITY_ROW_ARGB = {
 
 // ─── Excel output ─────────────────────────────────────────────────────────────
 
+const REPORT_COLUMNS = [
+  { header: "Severity",            width: 12 },
+  { header: "Snapshot Name",       width: 45 },
+  { header: "Content Type",        width: 14 },
+  { header: "OCR Text (Baseline)", width: 48 },
+  { header: "OCR Text (Actual)",   width: 48 },
+  { header: "Changed Values",      width: 55 },
+  { header: "Confidence %",        width: 14 },
+  { header: "Comment",             width: 65 },
+  { header: "Run Date",            width: 22 },
+];
+
+function argbToRgb(argb, fallback = "FFFFFF") {
+  if (typeof argb !== "string" || argb.length < 6) return fallback;
+  return argb.slice(-6);
+}
+
 async function writeOcrToExcel(snapshotName, ocrResults, severity, EXCEL_FILE = DEFAULT_EXCEL_FILE) {
   ensureDir(EXCEL_FILE);
 
-  const workbook = new ExcelJS.Workbook();
-  if (fs.existsSync(EXCEL_FILE)) {
-    await workbook.xlsx.readFile(EXCEL_FILE);
-  }
+  const workbook = fs.existsSync(EXCEL_FILE)
+    ? await XlsxPopulate.fromFileAsync(EXCEL_FILE)
+    : await XlsxPopulate.fromBlankAsync();
 
-  let sheet = workbook.getWorksheet("Diff Report");
+  let sheet = workbook.sheet("Diff Report");
   if (!sheet) {
-    sheet = workbook.addWorksheet("Diff Report");
-    sheet.columns = [
-      { header: "Severity",            key: "severity",      width: 12 },
-      { header: "Snapshot Name",       key: "name",          width: 45 },
-      { header: "Content Type",        key: "contentType",   width: 14 },
-      { header: "OCR Text (Baseline)", key: "baselineText",  width: 48 },
-      { header: "OCR Text (Actual)",   key: "actualText",    width: 48 },
-      { header: "Changed Values",      key: "changedValues", width: 55 },
-      { header: "Confidence %",        key: "confidence",    width: 14 },
-      { header: "Comment",             key: "comment",       width: 65 },
-      { header: "Run Date",            key: "date",          width: 22 },
-    ];
+    sheet = workbook.addSheet("Diff Report");
 
-    const headerRow = sheet.getRow(1);
-    headerRow.eachCell((cell) => {
-      cell.font      = { bold: true, color: { argb: "FFFFFFFF" } };
-      cell.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2F5496" } };
-      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      cell.border    = { bottom: { style: "medium", color: { argb: "FF000000" } } };
+    // Remove default empty sheet when creating a new workbook.
+    const defaultSheet = workbook.sheet("Sheet1");
+    if (defaultSheet && defaultSheet.name() !== "Diff Report") {
+      workbook.deleteSheet(defaultSheet.name());
+    }
+
+    REPORT_COLUMNS.forEach((col, index) => {
+      const c = index + 1;
+      sheet.cell(1, c).value(col.header).style({
+        bold: true,
+        fontColor: "FFFFFF",
+        fill: "2F5496",
+        horizontalAlignment: "center",
+        verticalAlignment: "center",
+        wrapText: true,
+      });
+      sheet.column(c).width(col.width);
     });
-    headerRow.height = 22;
   }
+
+  const usedRange = sheet.usedRange();
+  let rowNum = usedRange ? usedRange.endCell().rowNumber() + 1 : 2;
+  if (rowNum < 2) rowNum = 2;
 
   const date        = new Date().toLocaleString("en-GB");
-  const rowBgArgb   = SEVERITY_ROW_ARGB[severity] || "FFFFFFFF";
-  const sevBadgeArgb = SEVERITY_ARGB[severity]    || "FFFFFFFF";
+  const rowBgColor   = argbToRgb(SEVERITY_ROW_ARGB[severity], "FFFFFF");
+  const sevBadgeColor = argbToRgb(SEVERITY_ARGB[severity], "FFFFFF");
 
   for (const r of ocrResults) {
-    const row = sheet.addRow({
-      severity:      severity,
-      name:          snapshotName,
-      contentType:   r.contentType,
-      baselineText:  r.baselineText  || "(no text detected)",
-      actualText:    r.actualText    || "(no text detected)",
-      changedValues: r.changedValues || "—",
-      confidence:    `${r.confidence.toFixed(1)}%`,
-      comment:       r.comment,
+    const rowValues = [
+      severity,
+      snapshotName,
+      r.contentType,
+      r.baselineText || "(no text detected)",
+      r.actualText || "(no text detected)",
+      r.changedValues || "—",
+      `${r.confidence.toFixed(1)}%`,
+      r.comment,
       date,
+    ];
+
+    rowValues.forEach((value, index) => {
+      sheet.cell(rowNum, index + 1).value(value).style({
+        wrapText: true,
+        verticalAlignment: "top",
+        fill: rowBgColor,
+      });
     });
 
-    row.alignment = { wrapText: true, vertical: "top" };
-
-    // Tint entire row with severity colour
-    row.eachCell((cell) => {
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rowBgArgb } };
+    // Severity badge cell.
+    sheet.cell(rowNum, 1).style({
+      bold: true,
+      fill: sevBadgeColor,
+      horizontalAlignment: "center",
+      verticalAlignment: "center",
     });
 
-    // Severity badge cell — bold + saturated severity colour
-    const sevCell = row.getCell("severity");
-    sevCell.font  = { bold: true };
-    sevCell.fill  = { type: "pattern", pattern: "solid", fgColor: { argb: sevBadgeArgb } };
-    sevCell.alignment = { horizontal: "center", vertical: "middle" };
-
-    // Table type → blue badge
+    // Table type cell.
     if (r.contentType === "Table") {
-      row.getCell("contentType").fill = {
-        type: "pattern", pattern: "solid", fgColor: { argb: "FFDCE6F1" },
-      };
+      sheet.cell(rowNum, 3).style({ fill: "DCE6F1" });
     }
 
-    // Low confidence → amber on OCR text cells (overrides row tint)
+    // Low confidence -> amber on key OCR cells.
     if (r.confidence < 60) {
-      ["baselineText", "actualText", "confidence"].forEach((key) => {
-        row.getCell(key).fill = {
-          type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" },
-        };
+      [4, 5, 7].forEach((col) => {
+        sheet.cell(rowNum, col).style({ fill: "FFF2CC" });
       });
     }
+
+    rowNum += 1;
   }
 
-  sheet.views = [{ state: "frozen", ySplit: 1 }];
+  sheet.freezePanes(2, 1);
 
-  await workbook.xlsx.writeFile(EXCEL_FILE);
+  await workbook.toFileAsync(EXCEL_FILE);
   return EXCEL_FILE;
 }
 

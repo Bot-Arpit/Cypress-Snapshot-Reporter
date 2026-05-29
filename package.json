@@ -1,8 +1,9 @@
 {
-  "name": "cypress-pixelmatch",
+  "name": "cypress-snapshot-reporter",
   "version": "1.0.0",
   "description": "Cypress plugin for visual pixelmatch testing with pixel-level diff, OCR, severity classification, and Excel + Mochawesome reporting. Works fully offline.",
   "main": "plugin.js",
+  "type": "commonjs",
   "exports": {
     ".":          "./plugin.js",
     "./plugin":   "./plugin.js",
@@ -19,7 +20,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "prepublishOnly": "node -e \"const fs=require('fs'); if(!fs.existsSync('src/tessdata/eng.traineddata.gz')) throw new Error('Missing: src/tessdata/eng.traineddata.gz'); console.log('Publishing cypress-snapshot-reporter v' + require('./package.json').version);\""
+    "check:artifacts": "node -e \"const fs=require('fs'); const required=['plugin.js','commands.js','src/tasks/constants.js','src/tasks/snapshotTasks.js','src/tasks/ocrTasks.js','src/tessdata/eng.traineddata.gz']; const missing=required.filter((p)=>!fs.existsSync(p)); if(missing.length){throw new Error('Missing required publish artifact(s): '+missing.join(', '));} console.log('Publish artifacts verified.');\"",
+    "check:syntax": "node --check plugin.js && node --check commands.js && node --check src/tasks/snapshotTasks.js && node --check src/tasks/ocrTasks.js",
+    "check:pack": "npm pack --dry-run",
+    "audit:prod": "npm audit --omit=dev",
+    "prepublishOnly": "npm run check:artifacts && npm run check:syntax && npm run check:pack && npm run audit:prod"
   },
   "keywords": [
     "cypress",
@@ -48,17 +53,15 @@
     "node": ">=16.0.0"
   },
   "peerDependencies": {
-    "cypress": ">=13.0.0",
-    "cypress-mochawesome-reporter": ">=3.0.0"
-  },
-  "peerDependenciesMeta": {
-    "cypress": { "optional": false },
-    "cypress-mochawesome-reporter": { "optional": true }
+    "cypress": ">=13.0.0"
   },
   "dependencies": {
-    "exceljs":      "^4.4.0",
     "pixelmatch":   "5.3.0",
     "pngjs":        "^7.0.0",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "xlsx-populate": "^1.21.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
