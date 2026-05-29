@@ -51,6 +51,45 @@ function ensureDir(filePath) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+/**
+ * Resolves screenshot path robustly:
+ * 1) Direct path:   <dir>/<name>.png
+ * 2) Nested path:   <dir>/<any-subfolder>/<name>.png
+ *    (Cypress often adds a spec-name folder)
+ * Picks the newest nested match when multiple files exist.
+ */
+function resolveScreenshotPath(dir, safeName) {
+  const directPath = path.join(dir, `${safeName}.png`);
+  if (fs.existsSync(directPath)) return directPath;
+  if (!fs.existsSync(dir)) return null;
+
+  const tail = `${path.sep}${safeName}.png`.toLowerCase();
+  let bestMatch = null;
+  let bestMtime = -1;
+
+  const walk = (currentDir) => {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!fullPath.toLowerCase().endsWith(tail)) continue;
+
+      const { mtimeMs } = fs.statSync(fullPath);
+      if (mtimeMs > bestMtime) {
+        bestMtime = mtimeMs;
+        bestMatch = fullPath;
+      }
+    }
+  };
+
+  walk(dir);
+  return bestMatch;
+}
+
 // ─── Region detection ─────────────────────────────────────────────────────────
 
 function extractDiffRegions(diffBuffer, gapTolerance = 5, padding = 10) {
@@ -364,11 +403,11 @@ async function writeOcrToExcel(snapshotName, ocrResults, severity, EXCEL_FILE = 
 async function ocrDiffRegions({ name, mismatch = 0, totalPixels = 0, severity = "Low", BASELINE_DIR = DEFAULT_BASELINE_DIR, ACTUAL_DIR = DEFAULT_ACTUAL_DIR, DIFF_DIR = DEFAULT_DIFF_DIR, EXCEL_FILE = DEFAULT_EXCEL_FILE }) {
   const safeName     = name.replace(/[/\\]/g, path.sep);
   const diffPath     = path.join(DIFF_DIR,     `${safeName}.png`);
-  const actualPath   = path.join(ACTUAL_DIR,   `${safeName}.png`);
+  const actualPath   = resolveScreenshotPath(ACTUAL_DIR, safeName);
   const baselinePath = path.join(BASELINE_DIR, `${safeName}.png`);
 
   if (!fs.existsSync(diffPath))     return { status: "no_diff_image",     name, regionsProcessed: 0 };
-  if (!fs.existsSync(actualPath))   return { status: "no_actual_image",   name, regionsProcessed: 0 };
+  if (!actualPath)                  return { status: "no_actual_image",   name, regionsProcessed: 0 };
   if (!fs.existsSync(baselinePath)) return { status: "no_baseline_image", name, regionsProcessed: 0 };
 
   const diffBuffer     = fs.readFileSync(diffPath);

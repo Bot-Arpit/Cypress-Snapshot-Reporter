@@ -18,6 +18,45 @@ function removeIfExists(filePath) {
 }
 
 /**
+ * Resolves screenshot path robustly:
+ * 1) Direct path:   <dir>/<name>.png
+ * 2) Nested path:   <dir>/<any-subfolder>/<name>.png
+ *    (Cypress often adds a spec-name folder)
+ * Picks the newest nested match when multiple files exist.
+ */
+function resolveScreenshotPath(dir, safeName) {
+  const directPath = path.join(dir, `${safeName}.png`);
+  if (fs.existsSync(directPath)) return directPath;
+  if (!fs.existsSync(dir)) return null;
+
+  const tail = `${path.sep}${safeName}.png`.toLowerCase();
+  let bestMatch = null;
+  let bestMtime = -1;
+
+  const walk = (currentDir) => {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!fullPath.toLowerCase().endsWith(tail)) continue;
+
+      const { mtimeMs } = fs.statSync(fullPath);
+      if (mtimeMs > bestMtime) {
+        bestMtime = mtimeMs;
+        bestMatch = fullPath;
+      }
+    }
+  };
+
+  walk(dir);
+  return bestMatch;
+}
+
+/**
  * Copies one PNG object's pixels into a destination PNG at a given x offset.
  */
 function copyPanel(src, dst, offsetX) {
@@ -165,12 +204,13 @@ function getSeverity(mismatch, totalPixels) {
  */
 function compareSnapshot({ name, threshold = PIXELMATCH_OPTIONS.threshold, BASELINE_DIR = DEFAULT_BASELINE_DIR, ACTUAL_DIR = DEFAULT_ACTUAL_DIR, DIFF_DIR = DEFAULT_DIFF_DIR }) {
   const safeName     = name.replace(/[/\\]/g, path.sep);
-  const actualPath   = path.join(ACTUAL_DIR,   `${safeName}.png`);
+  const actualPath   = resolveScreenshotPath(ACTUAL_DIR, safeName);
+  const expectedPath = path.join(ACTUAL_DIR, `${safeName}.png`);
   const baselinePath = path.join(BASELINE_DIR, `${safeName}.png`);
   const diffPath     = path.join(DIFF_DIR,     `${safeName}.png`);
 
-  if (!fs.existsSync(actualPath)) {
-    throw new Error(`Actual screenshot not found: ${actualPath}`);
+  if (!actualPath) {
+    throw new Error(`Actual screenshot not found: ${expectedPath}`);
   }
 
   if (!fs.existsSync(baselinePath)) {
@@ -240,11 +280,12 @@ function compareSnapshot({ name, threshold = PIXELMATCH_OPTIONS.threshold, BASEL
  */
 function updateBaseline({ name, BASELINE_DIR = DEFAULT_BASELINE_DIR, ACTUAL_DIR = DEFAULT_ACTUAL_DIR }) {
   const safeName     = name.replace(/[/\\]/g, path.sep);
-  const actualPath   = path.join(ACTUAL_DIR,   `${safeName}.png`);
+  const actualPath   = resolveScreenshotPath(ACTUAL_DIR, safeName);
+  const expectedPath = path.join(ACTUAL_DIR, `${safeName}.png`);
   const baselinePath = path.join(BASELINE_DIR, `${safeName}.png`);
 
-  if (!fs.existsSync(actualPath)) {
-    throw new Error(`Actual screenshot not found: ${actualPath}`);
+  if (!actualPath) {
+    throw new Error(`Actual screenshot not found: ${expectedPath}`);
   }
   ensureDir(baselinePath);
   fs.copyFileSync(actualPath, baselinePath);

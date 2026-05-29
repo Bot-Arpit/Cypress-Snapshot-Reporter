@@ -41,15 +41,6 @@ import "cypress-snapshot-reporter/commands";
 cy.matchSnapshot("Report/Home");
 ```
 
-## How It Works
-
-- Takes screenshot into `actual`
-- If baseline does not exist: copies `actual` to `baseline` (keeps `actual`)
-- If baseline exists: compares baseline vs actual with `pixelmatch`
-- If diff exists: writes composite diff image in `diff`
-- If no diff/noise-only: no diff image is kept
-- If OCR is enabled: analyzes changed regions and appends to Excel report
-
 ## Main Options
 
 `configSnapshot(on, config, options)`
@@ -98,11 +89,3 @@ cypress/snapshots/
 
 - Node.js >= 16
 - Cypress >= 13
-
-## Publish
-
-```bash
-npm run prepublishOnly
-npm version patch
-npm publish
-```
