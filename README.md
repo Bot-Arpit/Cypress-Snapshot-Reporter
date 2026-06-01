@@ -79,7 +79,7 @@ configSnapshot(on, config, { updateBaseline: true });
 
 ```text
 cypress/snapshots/
-  baseline/   (commit to git)
+  baseline/   (baseline)
   actual/     (latest run)
   diff/       (generated only when real diff exists)
   reports/    (diff-report.xlsx)
