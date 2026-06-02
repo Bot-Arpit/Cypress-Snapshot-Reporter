@@ -106,7 +106,8 @@ Cypress.Commands.add("matchSnapshot", (name, options = {}) => {
       const shouldAutoUpdate = autoUpdateBaseline && (
         result.status === "matched" ||
         result.status === "noise_ignored" ||
-        result.status === "compared"
+        result.status === "compared" ||
+        result.status === "size_mismatch"
       );
 
       if (shouldAutoUpdate) {

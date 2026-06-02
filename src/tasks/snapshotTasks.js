@@ -17,6 +17,10 @@ function removeIfExists(filePath) {
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
 
+function samePath(left, right) {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
 /**
  * Resolves screenshot path robustly:
  * 1) Direct path:   <dir>/<name>.png
@@ -54,6 +58,24 @@ function resolveScreenshotPath(dir, safeName) {
 
   walk(dir);
   return bestMatch;
+}
+
+function prepareActualSnapshot({ safeName, name, ACTUAL_DIR, SCREENSHOTS_DIR }) {
+  const actualPath = path.join(ACTUAL_DIR, `${safeName}.png`);
+  const screenshotPath =
+    resolveScreenshotPath(SCREENSHOTS_DIR, safeName) ||
+    resolveScreenshotPath(ACTUAL_DIR, safeName);
+
+  if (!screenshotPath) {
+    throw new Error(`Actual screenshot not found for "${name}". Looked in: ${SCREENSHOTS_DIR} and ${ACTUAL_DIR}`);
+  }
+
+  ensureDir(actualPath);
+  if (!samePath(screenshotPath, actualPath)) {
+    fs.copyFileSync(screenshotPath, actualPath);
+  }
+
+  return actualPath;
 }
 
 /**
@@ -202,16 +224,11 @@ function getSeverity(mismatch, totalPixels) {
  *     "noise_ignored"    – diff found but below MIN_MISMATCH_PIXELS threshold
  *     "compared"         – real diff found; check mismatch / mismatchPercent
  */
-function compareSnapshot({ name, threshold = PIXELMATCH_OPTIONS.threshold, BASELINE_DIR = DEFAULT_BASELINE_DIR, ACTUAL_DIR = DEFAULT_ACTUAL_DIR, DIFF_DIR = DEFAULT_DIFF_DIR }) {
+function compareSnapshot({ name, threshold = PIXELMATCH_OPTIONS.threshold, BASELINE_DIR = DEFAULT_BASELINE_DIR, ACTUAL_DIR = DEFAULT_ACTUAL_DIR, DIFF_DIR = DEFAULT_DIFF_DIR, SCREENSHOTS_DIR = ACTUAL_DIR }) {
   const safeName     = name.replace(/[/\\]/g, path.sep);
-  const actualPath   = resolveScreenshotPath(ACTUAL_DIR, safeName);
-  const expectedPath = path.join(ACTUAL_DIR, `${safeName}.png`);
+  const actualPath   = prepareActualSnapshot({ safeName, name, ACTUAL_DIR, SCREENSHOTS_DIR });
   const baselinePath = path.join(BASELINE_DIR, `${safeName}.png`);
   const diffPath     = path.join(DIFF_DIR,     `${safeName}.png`);
-
-  if (!actualPath) {
-    throw new Error(`Actual screenshot not found: ${expectedPath}`);
-  }
 
   if (!fs.existsSync(baselinePath)) {
     ensureDir(baselinePath);
@@ -302,8 +319,9 @@ function makeSnapshotTasks(options = {}) {
   const BASELINE_DIR = options.baselineDir || DEFAULT_BASELINE_DIR;
   const ACTUAL_DIR   = options.actualDir   || DEFAULT_ACTUAL_DIR;
   const DIFF_DIR     = options.diffDir     || DEFAULT_DIFF_DIR;
+  const SCREENSHOTS_DIR = options.screenshotsDir || ACTUAL_DIR;
   return {
-    compareSnapshot: (params) => compareSnapshot({ ...params, BASELINE_DIR, ACTUAL_DIR, DIFF_DIR }),
+    compareSnapshot: (params) => compareSnapshot({ ...params, BASELINE_DIR, ACTUAL_DIR, DIFF_DIR, SCREENSHOTS_DIR }),
     updateBaseline:  (params) => updateBaseline({ ...params, BASELINE_DIR, ACTUAL_DIR }),
   };
 }

@@ -23,20 +23,30 @@
  *   }
  */
 function configSnapshot(on, config, options = {}) {
+  const baselineDir    = options.baselineDir || "cypress/snapshots/baseline";
+  const actualDir      = options.actualDir   || "cypress/snapshots/actual";
+  const diffDir        = options.diffDir     || "cypress/snapshots/diff";
+  const screenshotsDir = config.screenshotsFolder || actualDir;
+
+  if (!config.screenshotsFolder) {
+    config.screenshotsFolder = screenshotsDir;
+  }
+
   // Resolve task modules with options injected
   const { makeSnapshotTasks } = require("./src/tasks/snapshotTasks");
   const { makeOcrTasks }      = require("./src/tasks/ocrTasks");
 
   const snapshotTasks = makeSnapshotTasks({
-    baselineDir: options.baselineDir || "cypress/snapshots/baseline",
-    actualDir:   options.actualDir   || "cypress/snapshots/actual",
-    diffDir:     options.diffDir     || "cypress/snapshots/diff",
+    baselineDir,
+    actualDir,
+    diffDir,
+    screenshotsDir,
   });
 
   const ocrTasks = makeOcrTasks({
-    baselineDir: options.baselineDir || "cypress/snapshots/baseline",
-    actualDir:   options.actualDir   || "cypress/snapshots/actual",
-    diffDir:     options.diffDir     || "cypress/snapshots/diff",
+    baselineDir,
+    actualDir,
+    diffDir,
     excelFile:   options.excelFile   || "cypress/snapshots/reports/diff-report.xlsx",
   });
 
@@ -53,7 +63,7 @@ function configSnapshot(on, config, options = {}) {
     config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
   }
   if (config.env.snapshotDiffDir === undefined) {
-    config.env.snapshotDiffDir = options.diffDir || "cypress/snapshots/diff";
+    config.env.snapshotDiffDir = diffDir;
   }
 
   const browserWidth  = options.browserWidth  || 6400;
