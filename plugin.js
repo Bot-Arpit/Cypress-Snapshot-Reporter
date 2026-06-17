@@ -1,81 +1,73 @@
 "use strict";
 
-/**
- * cypress-snapshot-reporter — plugin entry
- *
- * Usage in cypress.config.js:
- *
- *   const { configSnapshot } = require("cypress-snapshot-reporter/plugin");
- *
- *   setupNodeEvents(on, config) {
- *     configSnapshot(on, config);          // all defaults
- *     // or with custom options:
- *     configSnapshot(on, config, {
- *       baselineDir:  "cypress/snapshots/baseline",
- *       actualDir:    "cypress/snapshots/actual",
- *       diffDir:      "cypress/snapshots/diff",
- *       excelFile:    "cypress/snapshots/reports/diff-report.xlsx",
- *       updateBaseline: false,
- *       browserWidth:  6400,
- *       browserHeight: 4400,
- *     });
- *     return config;
- *   }
- */
+const fs = require("fs");
+const path = require("path");
+
 function configSnapshot(on, config, options = {}) {
-  const baselineDir    = options.baselineDir || "cypress/snapshots/baseline";
-  const actualDir      = options.actualDir   || "cypress/snapshots/actual";
-  const diffDir        = options.diffDir     || "cypress/snapshots/diff";
-  const screenshotsDir = config.screenshotsFolder || actualDir;
+  const root = config.projectRoot || process.cwd();
+  const dir = path.join(root, "cypress", "snapshots");
 
-  if (!config.screenshotsFolder) {
-    config.screenshotsFolder = screenshotsDir;
-  }
+  const baselineDir = options.baselineDir || path.join(dir, "baseline");
+  const actualDir = options.actualDir || path.join(dir, "actual");
+  const diffDir = options.diffDir || path.join(dir, "diff");
+  const reportsDir = path.join(dir, "reports");
+  const excelFile = options.excelFile || path.join(reportsDir, "diff-report.xlsx");
 
-  // Resolve task modules with options injected
+  [baselineDir, actualDir, diffDir, reportsDir].forEach(d => {
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  });
+
+  config.env = config.env || {};
+  config.env.snapshotBaselineDir = baselineDir;
+  config.env.snapshotActualDir = actualDir;
+  config.env.snapshotDiffDir = diffDir;
+  config.env.snapshotExcelFile = excelFile;
+  config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
+
+  const tempDir = path.join(root, "cypress", "__temp__");
+  config.screenshotsFolder = tempDir;
+
   const { makeSnapshotTasks } = require("./src/tasks/snapshotTasks");
-  const { makeOcrTasks }      = require("./src/tasks/ocrTasks");
+  const { makeOcrTasks } = require("./src/tasks/ocrTasks");
 
   const snapshotTasks = makeSnapshotTasks({
     baselineDir,
     actualDir,
     diffDir,
-    screenshotsDir,
+    screenshotsDir: tempDir,
   });
 
   const ocrTasks = makeOcrTasks({
     baselineDir,
     actualDir,
     diffDir,
-    excelFile:   options.excelFile   || "cypress/snapshots/reports/diff-report.xlsx",
+    excelFile,
   });
 
   on("task", {
-    compareSnapshot:  snapshotTasks.compareSnapshot,
-    updateBaseline:   snapshotTasks.updateBaseline,
-    ocrDiffRegions:   ocrTasks.ocrDiffRegions,
+    compareSnapshot: snapshotTasks.compareSnapshot,
+    updateBaseline: snapshotTasks.updateBaseline,
+    ocrDiffRegions: ocrTasks.ocrDiffRegions,
   });
 
-  // Expose plugin-level defaults to browser-side commands.js via Cypress.env().
-  // Command-level options can still override these per call.
-  config.env = config.env || {};
-  if (config.env.snapshotUpdateBaseline === undefined) {
-    config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
-  }
-  if (config.env.snapshotDiffDir === undefined) {
-    config.env.snapshotDiffDir = diffDir;
-  }
+  on("after:spec", () => {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
-  const browserWidth  = options.browserWidth  || 6400;
-  const browserHeight = options.browserHeight || 4400;
+  const width = options.browserWidth || 1280;
+  const height = options.browserHeight || 800;
 
   on("before:browser:launch", (browser, launchOptions) => {
     if (browser.name === "electron") {
-      launchOptions.preferences.width  = browserWidth;
-      launchOptions.preferences.height = browserHeight;
+      launchOptions.preferences.width = width;
+      launchOptions.preferences.height = height;
     }
     return launchOptions;
   });
+
+  console.log(`[snapshot-reporter] Baseline: ${baselineDir}`);
 
   return config;
 }
