@@ -74,20 +74,20 @@ function resolveScreenshotPath(dir, safeName, waitTimeout = 5000) {
   return null;
 }
 
-function prepareActualSnapshot({ safeName, name, ACTUAL_DIR, SCREENSHOTS_DIR }) {
-  const actualPath = path.join(ACTUAL_DIR, `${safeName}.png`);
-  const screenshotPath = resolveScreenshotPath(SCREENSHOTS_DIR, safeName) || resolveScreenshotPath(ACTUAL_DIR, safeName);
+function placeScreenshot({ safeName, name, destDir, SCREENSHOTS_DIR }) {
+  const destPath = path.join(destDir, `${safeName}.png`);
+  const screenshotPath = resolveScreenshotPath(SCREENSHOTS_DIR, safeName) || resolveScreenshotPath(destDir, safeName);
 
   if (!screenshotPath) {
     throw new Error(`Screenshot not found: "${name}"`);
   }
 
-  ensureDir(actualPath);
-  if (!samePath(screenshotPath, actualPath)) {
-    fs.copyFileSync(screenshotPath, actualPath);
+  ensureDir(destPath);
+  if (!samePath(screenshotPath, destPath)) {
+    fs.copyFileSync(screenshotPath, destPath);
   }
 
-  return actualPath;
+  return destPath;
 }
 
 function copyPanel(src, dst, offsetX) {
@@ -168,16 +168,18 @@ function compareSnapshot({
   SCREENSHOTS_DIR = ACTUAL_DIR,
 }) {
   const safeName = name.replace(/\//g, path.sep);
-  const actualPath = prepareActualSnapshot({ safeName, name, ACTUAL_DIR, SCREENSHOTS_DIR });
   const baselinePath = path.join(BASELINE_DIR, `${safeName}.png`);
   const diffPath = path.join(DIFF_DIR, `${safeName}.png`);
 
+  // No baseline at this path → this capture becomes the baseline. Nothing goes to actual/.
   if (!fs.existsSync(baselinePath)) {
-    ensureDir(baselinePath);
-    fs.copyFileSync(actualPath, baselinePath);
+    placeScreenshot({ safeName, name, destDir: BASELINE_DIR, SCREENSHOTS_DIR });
     removeIfExists(diffPath);
     return { status: "baseline_created", name };
   }
+
+  // Baseline exists → store this capture in actual/ and compare.
+  const actualPath = placeScreenshot({ safeName, name, destDir: ACTUAL_DIR, SCREENSHOTS_DIR });
 
   const img1 = PNG.sync.read(fs.readFileSync(baselinePath));
   const img2 = PNG.sync.read(fs.readFileSync(actualPath));

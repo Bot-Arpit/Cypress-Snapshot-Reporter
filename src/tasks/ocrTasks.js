@@ -410,8 +410,7 @@ function makeOcrTasks(options = {}) {
   const BASELINE_DIR = options.baselineDir || DEFAULT_BASELINE_DIR;
   const ACTUAL_DIR = options.actualDir || DEFAULT_ACTUAL_DIR;
   const DIFF_DIR = options.diffDir || DEFAULT_DIFF_DIR;
-  const EXCEL_FILE = options.excelFile || DEFAULT_EXCEL_FILE;
-  return {
+  const EXCEL_FILE = options.excelFile || DEFAULT_EXCEL_FILEfix   return {
     ocrDiffRegions: (params) => ocrDiffRegions({ ...params, BASELINE_DIR, ACTUAL_DIR, DIFF_DIR, EXCEL_FILE }),
   };
 }

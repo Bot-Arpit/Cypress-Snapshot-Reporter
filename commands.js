@@ -23,10 +23,6 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
 
   const safeName = name.replace(/\\/g, "/").replace(/\/$/, "");
 
-  if (subject?.length > 0) {
-    cy.wrap(subject).scrollIntoView({ duration: 100 });
-  }
-
   cy.wait(100);
   cy.screenshot(safeName, { capture: "fullPage", overwrite: true });
 
