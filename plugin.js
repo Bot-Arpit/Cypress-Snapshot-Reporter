@@ -23,6 +23,7 @@ function configSnapshot(on, config, options = {}) {
   config.env.snapshotDiffDir = diffDir;
   config.env.snapshotExcelFile = excelFile;
   config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
+  config.env.snapshotScreenshotTimeout = options.screenshotTimeout ?? 5000;
 
   const tempDir = path.join(root, "cypress", "__temp__");
   config.screenshotsFolder = tempDir;
@@ -35,6 +36,7 @@ function configSnapshot(on, config, options = {}) {
     actualDir,
     diffDir,
     screenshotsDir: tempDir,
+    screenshotTimeout: options.screenshotTimeout ?? 5000,
   });
 
   const ocrTasks = makeOcrTasks({

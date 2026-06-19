@@ -6,6 +6,27 @@ function addContext(title, value) {
   }
 }
 
+const WINDOWS_INVALID_CHARS = /[<>:"|?*]/g;
+
+function sanitizeSnapshotName(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/$/, "")
+    .replace(WINDOWS_INVALID_CHARS, "_");
+}
+
+function warnIfSnapshotNameHasSpaces(name) {
+  const raw = String(name || "");
+  if (raw !== raw.trim()) {
+    Cypress.log({
+      name: "snapshot-warning",
+      message: `Snapshot name "${raw}" has leading/trailing spaces; they will be trimmed.`,
+      consoleProps: () => ({ name: raw }),
+    });
+  }
+}
+
 function toReportPath(baseDir, snapshotName) {
   const base = String(baseDir || "").replace(/\\/g, "/").replace(/\/+$/, "");
   const name = String(snapshotName || "").replace(/\\/g, "/").replace(/^\/+/, "");
@@ -18,15 +39,18 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
   const runOcr = options.runOcr ?? true;
   const autoUpdate = options.updateBaseline ?? Cypress.env("snapshotUpdateBaseline") ?? false;
   const diffDir = options.diffDir ?? Cypress.env("snapshotDiffDir") ?? "cypress/snapshots/diff";
+  const screenshotTimeout =
+    options.screenshotTimeout ?? Cypress.env("snapshotScreenshotTimeout") ?? 5000;
 
   if (!name) throw new Error("matchSnapshot requires a name");
 
-  const safeName = name.replace(/\\/g, "/").replace(/\/$/, "");
+  warnIfSnapshotNameHasSpaces(name);
+  const safeName = sanitizeSnapshotName(name);
 
   cy.wait(100);
   cy.screenshot(safeName, { capture: "fullPage", overwrite: true });
 
-  cy.task("compareSnapshot", { name: safeName, threshold }, { timeout: 30000 }).then((result) => {
+  cy.task("compareSnapshot", { name: safeName, threshold, screenshotTimeout }, { timeout: 30000 }).then((result) => {
     cy.log(
       `[snapshot] ${result.name} → ${result.status}` +
       (result.severity ? ` | ${result.severity}` : "") +
@@ -72,7 +96,7 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
     }
 
     if (autoUpdate && ["matched", "noise_ignored", "compared", "size_mismatch"].includes(result.status)) {
-      cy.task("updateBaseline", { name: safeName }).then(() => {
+      cy.task("updateBaseline", { name: safeName, screenshotTimeout }).then(() => {
         cy.log(`[snapshot] baseline updated: ${name}`);
         addContext("Snapshot", `Updated: ${name}`);
       });
