@@ -2,6 +2,34 @@
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
+
+// Best-effort: mark a directory as hidden. A leading dot already hides it on
+// macOS/Linux; on Windows we also set the hidden file attribute. Failures are
+// non-fatal — hiding is cosmetic.
+function hideDir(dir) {
+  if (process.platform !== "win32") return;
+  try {
+    execFileSync("attrib", ["+h", dir], { stdio: "ignore" });
+  } catch (e) {}
+}
+
+function removeDir(dir) {
+  try {
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  } catch (e) {}
+}
+
+// Delete the directory's contents but keep the (hidden) directory itself, so
+// the hidden attribute survives between specs.
+function emptyDir(dir) {
+  try {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir)) {
+      fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+    }
+  } catch (e) {}
+}
 
 function configSnapshot(on, config, options = {}) {
   const root = config.projectRoot || process.cwd();
@@ -25,7 +53,19 @@ function configSnapshot(on, config, options = {}) {
   config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
   config.env.snapshotScreenshotTimeout = options.screenshotTimeout ?? 5000;
 
-  const tempDir = path.join(root, "cypress", "__temp__");
+  // Remember where Cypress would write screenshots BEFORE we override it. If the
+  // user does not `return config` from setupNodeEvents, our override below is
+  // ignored and screenshots land here instead — so the tasks use this as a
+  // fallback search location.
+  const defaultScreenshotsDir = config.screenshotsFolder || path.join(root, "cypress", "screenshots");
+
+  // Internal scratch dir for raw captures. Dot-prefixed so it's hidden on
+  // macOS/Linux and visually de-emphasized in editors. Clear any leftovers from
+  // a previously interrupted run, then (re)create and hide it.
+  const tempDir = path.join(root, "cypress", ".csr-temp");
+  removeDir(tempDir);
+  fs.mkdirSync(tempDir, { recursive: true });
+  hideDir(tempDir);
   config.screenshotsFolder = tempDir;
 
   const { makeSnapshotTasks } = require("./src/tasks/snapshotTasks");
@@ -36,6 +76,7 @@ function configSnapshot(on, config, options = {}) {
     actualDir,
     diffDir,
     screenshotsDir: tempDir,
+    defaultScreenshotsDir,
     screenshotTimeout: options.screenshotTimeout ?? 5000,
   });
 
@@ -52,15 +93,25 @@ function configSnapshot(on, config, options = {}) {
     ocrDiffRegions: ocrTasks.ocrDiffRegions,
   });
 
+  // After each spec, clear captures but keep the hidden dir so its attribute
+  // (and tidy state) persists for the next spec.
   on("after:spec", () => {
-    if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    emptyDir(tempDir);
+  });
+
+  // After the whole run, remove the scratch dir entirely. Note: `after:run`
+  // fires in `cypress run` but not in interactive `cypress open`.
+  on("after:run", () => {
+    removeDir(tempDir);
   });
 
   const width = options.browserWidth || 1280;
   const height = options.browserHeight || 800;
 
+  // NOTE: Cypress only keeps ONE `before:browser:launch` handler. Registering a
+  // second one in your own setupNodeEvents silently overrides this one (and
+  // therefore the browserWidth/browserHeight sizing). Configure window size via
+  // the `browserWidth`/`browserHeight` options instead of adding your own.
   on("before:browser:launch", (browser, launchOptions) => {
     if (browser.name === "electron") {
       launchOptions.preferences.width = width;

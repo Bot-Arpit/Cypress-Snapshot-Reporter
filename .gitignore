@@ -24,6 +24,9 @@ cypress/videos/
 cypress/downloads/
 cypress/snapshots/
 
+# Internal scratch dir for raw snapshot captures (auto-cleaned by the plugin)
+cypress/.csr-temp/
+
 # IDE / OS files
 .vscode/
 .idea/

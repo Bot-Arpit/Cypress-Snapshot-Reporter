@@ -41,16 +41,45 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
   const diffDir = options.diffDir ?? Cypress.env("snapshotDiffDir") ?? "cypress/snapshots/diff";
   const screenshotTimeout =
     options.screenshotTimeout ?? Cypress.env("snapshotScreenshotTimeout") ?? 5000;
+  // `capture` keeps the historical full-page default. When a subject element is
+  // chained, the element is captured directly (Cypress ignores `capture` for
+  // element screenshots), which avoids full-page stitching failures on very
+  // large viewports.
+  const capture = options.capture ?? "fullPage";
 
   if (!name) throw new Error("matchSnapshot requires a name");
 
   warnIfSnapshotNameHasSpaces(name);
   const safeName = sanitizeSnapshotName(name);
 
-  cy.wait(100);
-  cy.screenshot(safeName, { capture: "fullPage", overwrite: true });
+  // Capture the EXACT path Cypress writes to via onAfterScreenshot, so the task
+  // never has to guess which folder the screenshot landed in (it differs when
+  // the screenshotsFolder override was not applied because setupNodeEvents did
+  // not `return config`).
+  let capturedScreenshotPath = null;
+  const screenshotOptions = {
+    capture,
+    overwrite: true,
+    onAfterScreenshot(_$el, props) {
+      if (props && props.path) capturedScreenshotPath = props.path;
+    },
+  };
 
-  cy.task("compareSnapshot", { name: safeName, threshold, screenshotTimeout }, { timeout: 30000 }).then((result) => {
+  cy.wait(100);
+  if (subject) {
+    cy.wrap(subject).screenshot(safeName, screenshotOptions);
+  } else {
+    cy.screenshot(safeName, screenshotOptions);
+  }
+
+  // Defer building the task payload until after the screenshot has run so the
+  // captured path is populated (command args are evaluated at queue time).
+  cy.then(() =>
+    cy.task(
+      "compareSnapshot",
+      { name: safeName, screenshotPath: capturedScreenshotPath, threshold, screenshotTimeout },
+      { timeout: 30000 }
+    ).then((result) => {
     cy.log(
       `[snapshot] ${result.name} → ${result.status}` +
       (result.severity ? ` | ${result.severity}` : "") +
@@ -105,5 +134,6 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
     if (hasDiff && failOnDiff) {
       throw new Error(`[${result.severity}] Mismatch "${name}": ${result.mismatchPercent}`);
     }
-  });
+    })
+  );
 });

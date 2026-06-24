@@ -14,6 +14,13 @@ try {
 const DEFAULT_BASELINE_DIR = "cypress/snapshots/baseline";
 const DEFAULT_ACTUAL_DIR = "cypress/snapshots/actual";
 const DEFAULT_DIFF_DIR = "cypress/snapshots/diff";
+// Where Cypress writes screenshots by default when the screenshotsFolder
+// override does not take effect (e.g. setupNodeEvents did not `return config`).
+const DEFAULT_SCREENSHOTS_DIR = "cypress/screenshots";
+
+const RETURN_CONFIG_HINT =
+  "If folders are empty, your setupNodeEvents likely did not `return config`. " +
+  "Make sure you do: `setupNodeEvents(on, config) { config = configSnapshot(on, config); return config; }`.";
 
 function ensureDir(filePath) {
   const dir = path.dirname(filePath);
@@ -125,20 +132,44 @@ async function resolveScreenshotPath(dir, safeName, waitTimeout = 5000) {
   return null;
 }
 
-async function placeScreenshot({ safeName, name, destDir, SCREENSHOTS_DIR, screenshotTimeout = 5000 }) {
+async function placeScreenshot({
+  safeName,
+  name,
+  destDir,
+  SCREENSHOTS_DIR,
+  DEFAULT_SCREENSHOTS_DIR: defaultScreenshotsDir = DEFAULT_SCREENSHOTS_DIR,
+  screenshotPath,
+  screenshotTimeout = 5000,
+}) {
   const destPath = path.join(destDir, `${safeName}.png`);
-  const screenshotPath =
-    (await resolveScreenshotPath(SCREENSHOTS_DIR, safeName, screenshotTimeout)) ||
-    (await resolveScreenshotPath(destDir, safeName, screenshotTimeout));
 
-  if (!screenshotPath) {
-    const debugInfo = formatPngFilesForDebug([SCREENSHOTS_DIR, destDir]);
-    throw new Error(`Screenshot not found: "${name}". PNG files found: ${debugInfo}`);
+  let sourcePath = null;
+
+  // 1. Highest priority: the exact path captured by the command. If it exists
+  // we can skip all directory scanning entirely.
+  if (screenshotPath && (await waitForFile(screenshotPath, screenshotTimeout))) {
+    sourcePath = screenshotPath;
+  }
+
+  // 2. Otherwise scan the known locations: the configured temp dir, the
+  // destination dir, and the default Cypress screenshots folder (covers the
+  // case where the screenshotsFolder override never applied).
+  const searchDirs = [...new Set([SCREENSHOTS_DIR, destDir, defaultScreenshotsDir].filter(Boolean))];
+  if (!sourcePath) {
+    for (const dir of searchDirs) {
+      sourcePath = await resolveScreenshotPath(dir, safeName, screenshotTimeout);
+      if (sourcePath) break;
+    }
+  }
+
+  if (!sourcePath) {
+    const debugInfo = formatPngFilesForDebug(searchDirs);
+    throw new Error(`Screenshot not found: "${name}". PNG files found: ${debugInfo}. ${RETURN_CONFIG_HINT}`);
   }
 
   ensureDir(destPath);
-  if (!samePath(screenshotPath, destPath)) {
-    fs.copyFileSync(screenshotPath, destPath);
+  if (!samePath(sourcePath, destPath)) {
+    fs.copyFileSync(sourcePath, destPath);
   }
 
   return destPath;
@@ -215,12 +246,14 @@ function getSeverity(mismatch, totalPixels) {
 
 async function compareSnapshot({
   name,
+  screenshotPath,
   threshold = PIXELMATCH_OPTIONS.threshold,
   screenshotTimeout = 5000,
   BASELINE_DIR = DEFAULT_BASELINE_DIR,
   ACTUAL_DIR = DEFAULT_ACTUAL_DIR,
   DIFF_DIR = DEFAULT_DIFF_DIR,
   SCREENSHOTS_DIR = ACTUAL_DIR,
+  DEFAULT_SCREENSHOTS_DIR: defaultScreenshotsDir = DEFAULT_SCREENSHOTS_DIR,
 }) {
   const safeName = name.replace(/\//g, path.sep);
   const baselinePath = path.join(BASELINE_DIR, `${safeName}.png`);
@@ -228,7 +261,15 @@ async function compareSnapshot({
 
   // No baseline at this path → this capture becomes the baseline. Nothing goes to actual/.
   if (!fs.existsSync(baselinePath)) {
-    await placeScreenshot({ safeName, name, destDir: BASELINE_DIR, SCREENSHOTS_DIR, screenshotTimeout });
+    await placeScreenshot({
+      safeName,
+      name,
+      destDir: BASELINE_DIR,
+      SCREENSHOTS_DIR,
+      DEFAULT_SCREENSHOTS_DIR: defaultScreenshotsDir,
+      screenshotPath,
+      screenshotTimeout,
+    });
     removeIfExists(diffPath);
     return { status: "baseline_created", name };
   }
@@ -239,6 +280,8 @@ async function compareSnapshot({
     name,
     destDir: ACTUAL_DIR,
     SCREENSHOTS_DIR,
+    DEFAULT_SCREENSHOTS_DIR: defaultScreenshotsDir,
+    screenshotPath,
     screenshotTimeout,
   });
 
@@ -300,7 +343,7 @@ async function updateBaseline({
 
   if (!actualPath) {
     const debugInfo = formatPngFilesForDebug([ACTUAL_DIR]);
-    throw new Error(`Screenshot not found: ${safeName}. PNG files found: ${debugInfo}`);
+    throw new Error(`Screenshot not found: ${safeName}. PNG files found: ${debugInfo}. ${RETURN_CONFIG_HINT}`);
   }
   ensureDir(baselinePath);
   fs.copyFileSync(actualPath, baselinePath);
@@ -312,6 +355,7 @@ function makeSnapshotTasks(options = {}) {
   const ACTUAL_DIR = options.actualDir || DEFAULT_ACTUAL_DIR;
   const DIFF_DIR = options.diffDir || DEFAULT_DIFF_DIR;
   const SCREENSHOTS_DIR = options.screenshotsDir || ACTUAL_DIR;
+  const DEFAULT_SCREENSHOTS_DIR_RESOLVED = options.defaultScreenshotsDir || DEFAULT_SCREENSHOTS_DIR;
   const screenshotTimeout = options.screenshotTimeout ?? 5000;
   return {
     compareSnapshot: (params) =>
@@ -321,6 +365,7 @@ function makeSnapshotTasks(options = {}) {
         ACTUAL_DIR,
         DIFF_DIR,
         SCREENSHOTS_DIR,
+        DEFAULT_SCREENSHOTS_DIR: DEFAULT_SCREENSHOTS_DIR_RESOLVED,
         screenshotTimeout: params.screenshotTimeout ?? screenshotTimeout,
       }),
     updateBaseline: (params) =>
