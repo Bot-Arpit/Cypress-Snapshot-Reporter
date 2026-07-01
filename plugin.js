@@ -40,6 +40,15 @@ function configSnapshot(on, config, options = {}) {
   const diffDir = options.diffDir || path.join(dir, "diff");
   const reportsDir = path.join(dir, "reports");
   const excelFile = options.excelFile || path.join(reportsDir, "diff-report.xlsx");
+  const pendingOcrFile = options.pendingOcrFile || path.join(reportsDir, "pending-ocr.json");
+
+  // OCR execution mode:
+  //   "deferred" (default) — Cypress only does the pixel compare and records
+  //     diffs to pending-ocr.json; OCR runs afterwards via
+  //     `node scripts/snapshot-ocr-report.js`. This keeps the Tesseract WASM
+  //     core (which can crash on Node 24) out of the Cypress process.
+  //   "inline" — legacy behaviour: OCR runs during the Cypress run.
+  const ocrMode = options.snapshotOcrMode === "inline" ? "inline" : "deferred";
 
   [baselineDir, actualDir, diffDir, reportsDir].forEach(d => {
     if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
@@ -50,6 +59,8 @@ function configSnapshot(on, config, options = {}) {
   config.env.snapshotActualDir = actualDir;
   config.env.snapshotDiffDir = diffDir;
   config.env.snapshotExcelFile = excelFile;
+  config.env.snapshotPendingOcrFile = pendingOcrFile;
+  config.env.snapshotOcrMode = ocrMode;
   config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
   config.env.snapshotScreenshotTimeout = options.screenshotTimeout ?? 5000;
 
@@ -85,12 +96,20 @@ function configSnapshot(on, config, options = {}) {
     actualDir,
     diffDir,
     excelFile,
+    pendingFile: pendingOcrFile,
   });
+
+  // Start each run with a clean manifest so the post-run report only reflects
+  // this run's diffs.
+  if (ocrMode === "deferred") {
+    ocrTasks.initPendingManifest();
+  }
 
   on("task", {
     compareSnapshot: snapshotTasks.compareSnapshot,
     updateBaseline: snapshotTasks.updateBaseline,
     ocrDiffRegions: ocrTasks.ocrDiffRegions,
+    recordPendingOcr: ocrTasks.recordPendingOcr,
   });
 
   // After each spec, clear captures but keep the hidden dir so its attribute
@@ -121,6 +140,10 @@ function configSnapshot(on, config, options = {}) {
   });
 
   console.log(`[snapshot-reporter] Baseline: ${baselineDir}`);
+  console.log(`[snapshot-reporter] OCR mode: ${ocrMode}` +
+    (ocrMode === "deferred"
+      ? " (run `node scripts/snapshot-ocr-report.js` after the run to build the OCR report)"
+      : ""));
 
   return config;
 }

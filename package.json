@@ -9,20 +9,27 @@
     "./plugin":   "./plugin.js",
     "./commands": "./commands.js"
   },
+  "bin": {
+    "cypress-snapshot-ocr-report": "scripts/snapshot-ocr-report.js"
+  },
   "files": [
     "plugin.js",
     "commands.js",
+    "scripts/snapshot-ocr-report.js",
     "src/tasks/constants.js",
     "src/tasks/snapshotTasks.js",
     "src/tasks/ocrTasks.js",
+    "src/tasks/tesseractSafeWorker.js",
     "src/tessdata/eng.traineddata.gz",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "test": "node test/snapshotTasks.test.js",
-    "check:artifacts": "node -e \"const fs=require('fs'); const required=['plugin.js','commands.js','src/tasks/constants.js','src/tasks/snapshotTasks.js','src/tasks/ocrTasks.js','src/tessdata/eng.traineddata.gz']; const missing=required.filter((p)=>!fs.existsSync(p)); if(missing.length){throw new Error('Missing required publish artifact(s): '+missing.join(', '));} console.log('Publish artifacts verified.');\"",
-    "check:syntax": "node --check plugin.js && node --check commands.js && node --check src/tasks/snapshotTasks.js && node --check src/tasks/ocrTasks.js",
+    "snapshot:run": "cypress run && node scripts/snapshot-ocr-report.js",
+    "snapshot:ocr-report": "node scripts/snapshot-ocr-report.js",
+    "check:artifacts": "node -e \"const fs=require('fs'); const required=['plugin.js','commands.js','scripts/snapshot-ocr-report.js','src/tasks/constants.js','src/tasks/snapshotTasks.js','src/tasks/ocrTasks.js','src/tasks/tesseractSafeWorker.js','src/tessdata/eng.traineddata.gz']; const missing=required.filter((p)=>!fs.existsSync(p)); if(missing.length){throw new Error('Missing required publish artifact(s): '+missing.join(', '));} console.log('Publish artifacts verified.');\"",
+    "check:syntax": "node --check plugin.js && node --check commands.js && node --check src/tasks/snapshotTasks.js && node --check src/tasks/ocrTasks.js && node --check src/tasks/tesseractSafeWorker.js && node --check scripts/snapshot-ocr-report.js",
     "check:pack": "npm pack --dry-run",
     "audit:prod": "npm audit --omit=dev",
     "prepublishOnly": "npm run check:artifacts && npm run check:syntax && npm run check:pack && npm run audit:prod"

@@ -22,12 +22,43 @@ module.exports = defineConfig({
     setupNodeEvents(on, config) {
       config = configSnapshot(on, config, {
         updateBaseline: false,
+        snapshotOcrMode: "deferred", // OCR runs AFTER the run (default)
       });
       return config; // REQUIRED — see note below
     },
   },
 });
 ```
+
+### Run tests, then build the OCR report
+
+In the default `"deferred"` OCR mode, `cypress run` performs only the fast pixel
+compare and records each diff to `cypress/snapshots/reports/pending-ocr.json`.
+OCR then runs in a **separate** Node process afterwards. Chain the two steps in
+an npm script:
+
+```json
+{
+  "scripts": {
+    "snapshot:run": "cypress run && node node_modules/cypress-snapshot-reporter/scripts/snapshot-ocr-report.js"
+  }
+}
+```
+
+Or use the bundled bin directly:
+
+```bash
+cypress run && npx cypress-snapshot-ocr-report
+```
+
+Why deferred? Tesseract's WASM core can crash the process on Node 24 (a
+relaxed-SIMD `DotProductSSE` abort). Running OCR after the Cypress run keeps that
+crash-prone core out of the Cypress process. OCR stays fully enabled — the post-
+run script pins a safe WASM core and wraps every recognition in `try/catch`, so a
+failing image degrades gracefully instead of failing the pipeline.
+
+To keep the old inline behaviour (OCR during the run), set
+`snapshotOcrMode: "inline"`.
 
 > **You MUST `return config`.** `configSnapshot` redirects screenshots to an
 > internal temp folder by setting `config.screenshotsFolder`. Cypress only
@@ -79,6 +110,8 @@ cy.matchSnapshot("Report/Home");
 - `actualDir` (default: `cypress/snapshots/actual`)
 - `diffDir` (default: `cypress/snapshots/diff`)
 - `excelFile` (default: `cypress/snapshots/reports/diff-report.xlsx`)
+- `pendingOcrFile` (default: `cypress/snapshots/reports/pending-ocr.json`) manifest of diffs awaiting OCR (deferred mode)
+- `snapshotOcrMode` (default: `"deferred"`) `"deferred"` runs OCR after the run via `scripts/snapshot-ocr-report.js`; `"inline"` runs it during the run
 - `updateBaseline` (default: `false`) auto-update baseline after compare
 - `browserWidth` (default: `1280`) window width via `before:browser:launch`
 - `browserHeight` (default: `800`) window height via `before:browser:launch`
@@ -89,6 +122,7 @@ cy.matchSnapshot("Report/Home");
 - `threshold` (default: `0.1`)
 - `failOnDiff` (default: `false`)
 - `runOcr` (default: `true`)
+- `ocrMode` (optional) per-call override of `snapshotOcrMode` (`"deferred"` | `"inline"`)
 - `updateBaseline` (default: `false`) per-call override
 - `diffDir` (optional) per-call diff path for reporter link
 - `capture` (default: `"fullPage"`) Cypress capture mode (`"fullPage"`,
@@ -127,7 +161,7 @@ cypress/snapshots/
   baseline/   (baseline)
   actual/     (latest run)
   diff/       (generated only when real diff exists)
-  reports/    (diff-report.xlsx)
+  reports/    (diff-report.xlsx, pending-ocr.json)
 ```
 
 ## Requirements

@@ -8,8 +8,13 @@ const DEFAULT_BASELINE_DIR = "cypress/snapshots/baseline";
 const DEFAULT_ACTUAL_DIR = "cypress/snapshots/actual";
 const DEFAULT_DIFF_DIR = "cypress/snapshots/diff";
 const DEFAULT_EXCEL_FILE = "cypress/snapshots/reports/diff-report.xlsx";
+const DEFAULT_PENDING_FILE = "cypress/snapshots/reports/pending-ocr.json";
 
 const MIN_REGION_AREA = 100;
+
+// Absolute path to the worker bootstrap that pins a crash-free WASM core.
+// See tesseractSafeWorker.js for the Node 24 relaxed-SIMD background.
+const SAFE_WORKER_PATH = path.join(__dirname, "tesseractSafeWorker.js");
 
 let worker = null;
 
@@ -18,6 +23,12 @@ async function getWorker() {
   const { createWorker } = require("tesseract.js");
   worker = await createWorker("eng", 1, {
     langPath: path.join(__dirname, "../tessdata"),
+    // Route through our bootstrap so relaxed-SIMD is disabled inside the worker
+    // thread before tesseract selects a core (avoids the DotProductSSE crash).
+    workerPath: SAFE_WORKER_PATH,
+    // We ship the gunzipped traineddata locally, so there's no need to cache a
+    // copy into the caller's cwd (which would drop a stray eng.traineddata).
+    cacheMethod: "none",
   });
   return worker;
 }
@@ -358,34 +369,48 @@ async function ocrDiffRegions({
 
   if (regions.length === 0) return { status: "no_red_regions", name, regionsProcessed: 0 };
 
-  const w = await getWorker();
   const ocrResults = [];
 
-  for (const region of regions) {
-    const actualCrop = cropRegionFromParsed(actualPng, region);
-    const baselineCrop = cropRegionFromParsed(baselinePng, region);
+  // Tesseract runs a WASM core in a worker thread. On some Node/OS combinations
+  // (notably Node 24 relaxed-SIMD) it can abort the process. tesseractSafeWorker
+  // pins a safe core, and this try/catch is the final safety net so a failing
+  // OCR pass degrades gracefully instead of taking the run down.
+  try {
+    const w = await getWorker();
 
-    const actualResult = await w.recognize(actualCrop);
-    const baselineResult = await w.recognize(baselineCrop);
+    for (const region of regions) {
+      const actualCrop = cropRegionFromParsed(actualPng, region);
+      const baselineCrop = cropRegionFromParsed(baselinePng, region);
 
-    const actualText = actualResult.data.text.trim();
-    const baselineText = baselineResult.data.text.trim();
-    const confidence = actualResult.data.confidence;
-    const blocks = actualResult.data.blocks || [];
+      const actualResult = await w.recognize(actualCrop);
+      const baselineResult = await w.recognize(baselineCrop);
 
-    const contentType = detectContentType(blocks, actualText);
-    const { rowDiffs, changedValuesText } = compareTableRows(baselineText, actualText);
-    const comment = generateComment(contentType, baselineText, actualText, rowDiffs);
+      const actualText = actualResult.data.text.trim();
+      const baselineText = baselineResult.data.text.trim();
+      const confidence = actualResult.data.confidence;
+      const blocks = actualResult.data.blocks || [];
 
-    ocrResults.push({
-      region,
-      contentType,
-      baselineText,
-      actualText,
-      changedValues: changedValuesText,
-      confidence,
-      comment,
-    });
+      const contentType = detectContentType(blocks, actualText);
+      const { rowDiffs, changedValuesText } = compareTableRows(baselineText, actualText);
+      const comment = generateComment(contentType, baselineText, actualText, rowDiffs);
+
+      ocrResults.push({
+        region,
+        contentType,
+        baselineText,
+        actualText,
+        changedValues: changedValuesText,
+        confidence,
+        comment,
+      });
+    }
+  } catch (err) {
+    return {
+      status: "ocr_failed",
+      name,
+      regionsProcessed: 0,
+      error: err && err.message ? err.message : String(err),
+    };
   }
 
   const excelPath = await writeOcrToExcel(name, ocrResults, severity, EXCEL_FILE);
@@ -406,14 +431,103 @@ async function ocrDiffRegions({
   };
 }
 
+// ---------------------------------------------------------------------------
+// Deferred OCR manifest
+//
+// In "deferred" mode Cypress does NOT run OCR during the run (which keeps the
+// crash-prone WASM core out of the Cypress process entirely). Instead, each diff
+// is recorded to a small JSON manifest that a post-run script consumes to run
+// OCR and build the Excel report.
+// ---------------------------------------------------------------------------
+
+function readManifest(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    return null;
+  }
+}
+
+// (Re)create an empty manifest at the start of a run, recording the resolved
+// output directories so the post-run script needs no extra configuration.
+function initPendingManifest({
+  PENDING_FILE = DEFAULT_PENDING_FILE,
+  BASELINE_DIR = DEFAULT_BASELINE_DIR,
+  ACTUAL_DIR = DEFAULT_ACTUAL_DIR,
+  DIFF_DIR = DEFAULT_DIFF_DIR,
+  EXCEL_FILE = DEFAULT_EXCEL_FILE,
+} = {}) {
+  ensureDir(PENDING_FILE);
+  const manifest = {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    dirs: {
+      baselineDir: BASELINE_DIR,
+      actualDir: ACTUAL_DIR,
+      diffDir: DIFF_DIR,
+      excelFile: EXCEL_FILE,
+    },
+    items: [],
+  };
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(manifest, null, 2));
+  return manifest;
+}
+
+// Append (or replace) a pending OCR entry for a single diff.
+function recordPendingOcr({
+  name,
+  mismatch = 0,
+  totalPixels = 0,
+  severity = "Low",
+  mismatchPercent,
+  PENDING_FILE = DEFAULT_PENDING_FILE,
+}) {
+  const manifest = readManifest(PENDING_FILE) || {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    dirs: {},
+    items: [],
+  };
+  if (!Array.isArray(manifest.items)) manifest.items = [];
+
+  manifest.items = manifest.items.filter((i) => i.name !== name);
+  manifest.items.push({
+    name,
+    mismatch,
+    totalPixels,
+    severity,
+    mismatchPercent,
+    recordedAt: new Date().toISOString(),
+  });
+
+  ensureDir(PENDING_FILE);
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(manifest, null, 2));
+  return { status: "recorded", name, pending: manifest.items.length };
+}
+
 function makeOcrTasks(options = {}) {
   const BASELINE_DIR = options.baselineDir || DEFAULT_BASELINE_DIR;
   const ACTUAL_DIR = options.actualDir || DEFAULT_ACTUAL_DIR;
   const DIFF_DIR = options.diffDir || DEFAULT_DIFF_DIR;
   const EXCEL_FILE = options.excelFile || DEFAULT_EXCEL_FILE;
+  const PENDING_FILE = options.pendingFile || DEFAULT_PENDING_FILE;
   return {
     ocrDiffRegions: (params) => ocrDiffRegions({ ...params, BASELINE_DIR, ACTUAL_DIR, DIFF_DIR, EXCEL_FILE }),
+    recordPendingOcr: (params) => recordPendingOcr({ ...params, PENDING_FILE }),
+    initPendingManifest: () =>
+      initPendingManifest({ PENDING_FILE, BASELINE_DIR, ACTUAL_DIR, DIFF_DIR, EXCEL_FILE }),
   };
 }
 
-module.exports = { makeOcrTasks, ocrDiffRegions };
+module.exports = {
+  makeOcrTasks,
+  ocrDiffRegions,
+  recordPendingOcr,
+  initPendingManifest,
+  readManifest,
+  DEFAULT_PENDING_FILE,
+  DEFAULT_BASELINE_DIR,
+  DEFAULT_ACTUAL_DIR,
+  DEFAULT_DIFF_DIR,
+  DEFAULT_EXCEL_FILE,
+};

@@ -37,6 +37,9 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
   const threshold = options.threshold ?? Cypress.env("snapshotThreshold") ?? 0.1;
   const failOnDiff = options.failOnDiff ?? Cypress.env("failOnSnapshotDiff") ?? false;
   const runOcr = options.runOcr ?? true;
+  // "deferred" (default): record diffs now, run OCR after the Cypress run.
+  // "inline": run OCR during the test (legacy; can crash the WASM core on Node 24).
+  const ocrMode = options.ocrMode ?? Cypress.env("snapshotOcrMode") ?? "deferred";
   const autoUpdate = options.updateBaseline ?? Cypress.env("snapshotUpdateBaseline") ?? false;
   const diffDir = options.diffDir ?? Cypress.env("snapshotDiffDir") ?? "cypress/snapshots/diff";
   const screenshotTimeout =
@@ -101,7 +104,23 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
       addContext("Diff Image", toReportPath(diffDir, safeName));
     }
 
-    if (hasDiff && runOcr) {
+    if (hasDiff && runOcr && ocrMode === "deferred") {
+      // Defer OCR: only record the diff now. The heavy (and on Node 24
+      // crash-prone) Tesseract pass runs after the Cypress run via
+      // `node scripts/snapshot-ocr-report.js`.
+      cy.task("recordPendingOcr", {
+        name: safeName,
+        mismatch: result.mismatch,
+        totalPixels: result.totalPixels,
+        severity: result.severity,
+        mismatchPercent: result.mismatchPercent,
+      }).then((rec) => {
+        cy.log(`[ocr] deferred (${rec.pending} pending) — run snapshot-ocr-report after the run`);
+        addContext("OCR", `Deferred [${result.severity}] — processed after the run`);
+      });
+    }
+
+    if (hasDiff && runOcr && ocrMode === "inline") {
       cy.task("ocrDiffRegions", {
         name: safeName,
         mismatch: result.mismatch,
