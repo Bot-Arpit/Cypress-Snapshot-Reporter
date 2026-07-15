@@ -2,22 +2,24 @@
 "use strict";
 
 /**
- * Post-run OCR report generator.
+ * Post-run OCR report generator (shared by plugin `after:run` and the CLI).
  *
- * `cypress run` (in the default "deferred" OCR mode) does the pixel compare only
- * and records each diff to a `pending-ocr.json` manifest. This script runs
- * afterwards, outside of Cypress, to:
+ * During `cypress run`, both OCR modes (`"after"` and `"deferred"`) do the pixel
+ * compare only and record each diff to a `pending-ocr.json` manifest. This script
+ * builds the Excel report outside of Cypress:
  *   1. read the manifest (for output directories + per-diff severity), and
  *   2. process every PNG in the diff/ folder through Tesseract OCR, and
  *   3. write the results to diff-report.xlsx.
  *
- * OCR runs through tesseractSafeWorker, which pins a crash-free WASM core on
- * Node 24. Every Tesseract call is additionally wrapped in try/catch so a single
- * failing image never aborts the report — and a total OCR failure still exits 0
- * so it does not break the `cypress run && node scripts/...` pipeline.
- *
- * Usage:
+ * Invoked automatically when snapshotOcrMode is `"after"` (plugin after:run),
+ * or manually when mode is `"deferred"`:
+ *   npx cypress-snapshot-ocr-report
  *   node scripts/snapshot-ocr-report.js [pathToPendingManifest]
+ *
+ * OCR runs through tesseractSafeWorker, which pins a crash-free WASM core on
+ * Node 24. Every Tesseract call is wrapped in try/catch so a single failing
+ * image never aborts the report — and a total OCR failure still exits 0 so it
+ * does not break CI pipelines.
  *
  * Environment overrides (used when no manifest is found):
  *   SNAPSHOT_PENDING_OCR_FILE, SNAPSHOT_DIFF_DIR, SNAPSHOT_BASELINE_DIR,
@@ -42,8 +44,9 @@ function log(msg) {
   console.log(`[snapshot-ocr-report] ${msg}`);
 }
 
-function resolveConfig() {
+function resolveConfig(overrides = {}) {
   const manifestPath =
+    overrides.manifestPath ||
     process.argv[2] ||
     process.env.SNAPSHOT_PENDING_OCR_FILE ||
     DEFAULT_PENDING_FILE;
@@ -126,8 +129,8 @@ function buildWorkList({ manifest, diffDir }) {
   return work;
 }
 
-async function main() {
-  const cfg = resolveConfig();
+async function runOcrReport(overrides = {}) {
+  const cfg = resolveConfig(overrides);
 
   log(`Manifest: ${cfg.manifestPath}${cfg.manifest ? "" : " (not found — using defaults)"}`);
   log(`Diff dir: ${cfg.diffDir}`);
@@ -137,7 +140,7 @@ async function main() {
 
   if (work.length === 0) {
     log("No diffs to process. Nothing to do.");
-    return;
+    return { status: "empty", processed: 0, failed: 0, skipped: 0, excelFile: cfg.excelFile };
   }
 
   // Fresh report per run: remove any Excel from a previous run so the output
@@ -190,15 +193,25 @@ async function main() {
 
   log(`Done. ${processed} processed, ${failed} failed, ${skipped} skipped.`);
   if (processed > 0) log(`Report written to ${cfg.excelFile}`);
+
+  return { status: "done", processed, failed, skipped, excelFile: cfg.excelFile };
 }
 
-main()
-  .then(() => {
-    // Exit 0 even if some items failed: OCR problems must not break the pipeline.
-    process.exit(0);
-  })
-  .catch((err) => {
-    // Truly unexpected failure — log and still exit 0 to keep the pipeline green.
-    log(`Unexpected error: ${err && err.stack ? err.stack : err}`);
-    process.exit(0);
-  });
+async function main() {
+  await runOcrReport();
+}
+
+module.exports = { runOcrReport, resolveConfig, buildWorkList, log };
+
+if (require.main === module) {
+  main()
+    .then(() => {
+      // Exit 0 even if some items failed: OCR problems must not break the pipeline.
+      process.exit(0);
+    })
+    .catch((err) => {
+      // Truly unexpected failure — log and still exit 0 to keep the pipeline green.
+      log(`Unexpected error: ${err && err.stack ? err.stack : err}`);
+      process.exit(0);
+    });
+}

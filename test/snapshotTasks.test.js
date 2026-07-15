@@ -6,16 +6,22 @@ const os = require("os");
 const path = require("path");
 const { PNG } = require("pngjs");
 
-const { makeSnapshotTasks } = require("../src/tasks/snapshotTasks");
+const { makeSnapshotTasks, prepareImagesForCompare } = require("../src/tasks/snapshotTasks");
 
 function makeTempRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "csr-test-"));
 }
 
-function writePng(filePath, { width = 4, height = 4 } = {}) {
+function writePng(filePath, { width = 4, height = 4, fill = 255, mutate } = {}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const png = new PNG({ width, height });
-  png.data.fill(255);
+  for (let i = 0; i < png.data.length; i += 4) {
+    png.data[i] = fill;
+    png.data[i + 1] = fill;
+    png.data[i + 2] = fill;
+    png.data[i + 3] = 255;
+  }
+  if (typeof mutate === "function") mutate(png);
   fs.writeFileSync(filePath, PNG.sync.write(png));
 }
 
@@ -94,6 +100,108 @@ test("error message includes default folder and return-config hint", async () =>
       return true;
     }
   );
+});
+
+// 4. Minor height difference within tolerance compares the overlapping region.
+test("compares overlapping region when height differs within tolerance", async () => {
+  const root = makeTempRoot();
+  const baselineDir = path.join(root, "baseline");
+  const actualDir = path.join(root, "actual");
+  const diffDir = path.join(root, "diff");
+  const screenshotsDir = path.join(root, "__temp__");
+
+  writePng(path.join(baselineDir, "Panel.png"), {
+    width: 20,
+    height: 12,
+    mutate: (png) => {
+      for (let x = 0; x < 20; x++) {
+        const i = (2 * png.width + x) * 4;
+        png.data[i] = 0;
+        png.data[i + 1] = 0;
+        png.data[i + 2] = 0;
+      }
+    },
+  });
+
+  writePng(path.join(screenshotsDir, "Panel.png"), {
+    width: 20,
+    height: 11,
+    mutate: (png) => {
+      for (let x = 0; x < 20; x++) {
+        const i = (2 * png.width + x) * 4;
+        png.data[i] = 255;
+        png.data[i + 1] = 0;
+        png.data[i + 2] = 0;
+      }
+    },
+  });
+
+  const { compareSnapshot } = makeSnapshotTasks({
+    baselineDir,
+    actualDir,
+    diffDir,
+    screenshotsDir,
+    screenshotTimeout: 500,
+  });
+
+  const result = await compareSnapshot({
+    name: "Panel",
+    screenshotPath: path.join(screenshotsDir, "Panel.png"),
+  });
+
+  assert.strictEqual(result.status, "compared");
+  assert.strictEqual(result.sizeAdjusted, true);
+  assert.deepStrictEqual(result.baseline, { width: 20, height: 12 });
+  assert.deepStrictEqual(result.actual, { width: 20, height: 11 });
+  assert.ok(result.mismatch >= 10, "overlap diff should exceed noise threshold");
+  assert.ok(fs.existsSync(path.join(diffDir, "Panel.png")), "diff image should be written");
+});
+
+// 5. Size difference beyond tolerance still returns size_mismatch.
+test("returns size_mismatch when dimensions exceed tolerance", async () => {
+  const root = makeTempRoot();
+  const baselineDir = path.join(root, "baseline");
+  const actualDir = path.join(root, "actual");
+  const diffDir = path.join(root, "diff");
+  const screenshotsDir = path.join(root, "__temp__");
+
+  writePng(path.join(baselineDir, "Panel.png"), { width: 20, height: 20 });
+  writePng(path.join(screenshotsDir, "Panel.png"), { width: 20, height: 10 });
+
+  const { compareSnapshot } = makeSnapshotTasks({
+    baselineDir,
+    actualDir,
+    diffDir,
+    screenshotsDir,
+    screenshotTimeout: 500,
+  });
+
+  const result = await compareSnapshot({
+    name: "Panel",
+    screenshotPath: path.join(screenshotsDir, "Panel.png"),
+  });
+
+  assert.strictEqual(result.status, "size_mismatch");
+  assert.strictEqual(result.baseline.height, 20);
+  assert.strictEqual(result.actual.height, 10);
+  assert.ok(!fs.existsSync(path.join(diffDir, "Panel.png")), "diff image should not be written");
+});
+
+// 6. prepareImagesForCompare crops to top-left overlap.
+test("prepareImagesForCompare aligns to overlapping top-left region", () => {
+  const img1 = new PNG({ width: 4, height: 3 });
+  const img2 = new PNG({ width: 4, height: 2 });
+  img1.data.fill(100);
+  img2.data.fill(100);
+
+  const prepared = prepareImagesForCompare(img1, img2);
+  assert.ok(prepared);
+  assert.strictEqual(prepared.sizeAdjusted, true);
+  assert.strictEqual(prepared.img1.width, 4);
+  assert.strictEqual(prepared.img1.height, 2);
+  assert.strictEqual(prepared.img2.width, 4);
+  assert.strictEqual(prepared.img2.height, 2);
+  assert.strictEqual(prepareImagesForCompare(img1, img2, 0), null);
 });
 
 (async () => {

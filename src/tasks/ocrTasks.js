@@ -432,12 +432,12 @@ async function ocrDiffRegions({
 }
 
 // ---------------------------------------------------------------------------
-// Deferred OCR manifest
+// Pending OCR manifest
 //
-// In "deferred" mode Cypress does NOT run OCR during the run (which keeps the
-// crash-prone WASM core out of the Cypress process entirely). Instead, each diff
-// is recorded to a small JSON manifest that a post-run script consumes to run
-// OCR and build the Excel report.
+// Both OCR modes ("after" and "deferred") keep Tesseract out of the Cypress
+// test process. Each diff is recorded to a small JSON manifest; OCR then runs
+// via scripts/snapshot-ocr-report.js (auto in after:run for "after", or manually
+// for "deferred").
 // ---------------------------------------------------------------------------
 
 function readManifest(file) {

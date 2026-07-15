@@ -229,6 +229,46 @@ const PIXELMATCH_OPTIONS = {
 };
 
 const MIN_MISMATCH_PIXELS = 10;
+const MAX_SIZE_TOLERANCE = 5;
+
+function cropPng(img, width, height) {
+  const dst = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const si = (y * img.width + x) * 4;
+      const di = (y * width + x) * 4;
+      dst.data[di] = img.data[si];
+      dst.data[di + 1] = img.data[si + 1];
+      dst.data[di + 2] = img.data[si + 2];
+      dst.data[di + 3] = img.data[si + 3];
+    }
+  }
+  return dst;
+}
+
+function prepareImagesForCompare(img1, img2, maxTolerance = MAX_SIZE_TOLERANCE) {
+  const widthDiff = Math.abs(img1.width - img2.width);
+  const heightDiff = Math.abs(img1.height - img2.height);
+
+  if (widthDiff > maxTolerance || heightDiff > maxTolerance) {
+    return null;
+  }
+
+  if (img1.width === img2.width && img1.height === img2.height) {
+    return { img1, img2, sizeAdjusted: false };
+  }
+
+  const width = Math.min(img1.width, img2.width);
+  const height = Math.min(img1.height, img2.height);
+
+  return {
+    img1: cropPng(img1, width, height),
+    img2: cropPng(img2, width, height),
+    sizeAdjusted: true,
+    baseline: { width: img1.width, height: img1.height },
+    actual: { width: img2.width, height: img2.height },
+  };
+}
 
 const SEVERITY_THRESHOLDS = {
   critical: 2.0,
@@ -285,18 +325,21 @@ async function compareSnapshot({
     screenshotTimeout,
   });
 
-  const img1 = PNG.sync.read(fs.readFileSync(baselinePath));
-  const img2 = PNG.sync.read(fs.readFileSync(actualPath));
+  const baselineImg = PNG.sync.read(fs.readFileSync(baselinePath));
+  const actualImg = PNG.sync.read(fs.readFileSync(actualPath));
 
-  if (img1.width !== img2.width || img1.height !== img2.height) {
+  const prepared = prepareImagesForCompare(baselineImg, actualImg);
+  if (!prepared) {
     removeIfExists(diffPath);
     return {
       status: "size_mismatch",
       name,
-      baseline: { width: img1.width, height: img1.height },
-      actual: { width: img2.width, height: img2.height },
+      baseline: { width: baselineImg.width, height: baselineImg.height },
+      actual: { width: actualImg.width, height: actualImg.height },
     };
   }
+
+  const { img1, img2, sizeAdjusted, baseline: baselineSize, actual: actualSize } = prepared;
 
   const diff = new PNG({ width: img1.width, height: img1.height });
   const totalPixels = img1.width * img1.height;
@@ -305,14 +348,18 @@ async function compareSnapshot({
     threshold,
   });
 
+  const sizeMeta = sizeAdjusted
+    ? { sizeAdjusted: true, baseline: baselineSize, actual: actualSize }
+    : {};
+
   if (mismatch === 0) {
     removeIfExists(diffPath);
-    return { status: "matched", name, mismatch: 0, mismatchPercent: "0.0000%" };
+    return { status: "matched", name, mismatch: 0, mismatchPercent: "0.0000%", ...sizeMeta };
   }
 
   if (mismatch < MIN_MISMATCH_PIXELS) {
     removeIfExists(diffPath);
-    return { status: "noise_ignored", name, mismatch, mismatchPercent: "< noise" };
+    return { status: "noise_ignored", name, mismatch, mismatchPercent: "< noise", ...sizeMeta };
   }
 
   const severity = getSeverity(mismatch, totalPixels);
@@ -328,6 +375,7 @@ async function compareSnapshot({
     mismatchPercent: `${severity.pct.toFixed(4)}%`,
     severity: severity.level,
     severityArgb: severity.argb,
+    ...sizeMeta,
   };
 }
 
@@ -378,4 +426,10 @@ function makeSnapshotTasks(options = {}) {
   };
 }
 
-module.exports = { makeSnapshotTasks, compareSnapshot, updateBaseline };
+module.exports = {
+  makeSnapshotTasks,
+  compareSnapshot,
+  updateBaseline,
+  prepareImagesForCompare,
+  MAX_SIZE_TOLERANCE,
+};

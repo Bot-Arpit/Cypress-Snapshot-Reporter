@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 
 // Best-effort: mark a directory as hidden. A leading dot already hides it on
 // macOS/Linux; on Windows we also set the hidden file attribute. Failures are
@@ -31,6 +31,69 @@ function emptyDir(dir) {
   } catch (e) {}
 }
 
+/**
+ * Resolve OCR mode.
+ *   "after"    (default) — record diffs during the run; auto-run OCR in after:run
+ *   "deferred"           — record diffs during the run; user runs OCR manually
+ * Legacy "inline" (and any unknown value) falls back to "after" with a warning.
+ */
+function resolveOcrMode(raw) {
+  if (raw === undefined || raw === null || raw === "after") return "after";
+  if (raw === "deferred") return "deferred";
+  if (raw === "inline") {
+    console.warn(
+      `[snapshot-reporter] snapshotOcrMode "inline" is removed; falling back to "after". ` +
+        `OCR runs after the Cypress run (not during tests).`
+    );
+    return "after";
+  }
+  console.warn(
+    `[snapshot-reporter] Unknown snapshotOcrMode "${raw}"; falling back to "after".`
+  );
+  return "after";
+}
+
+// Spawn the post-run OCR script in a child process so Tesseract stays out of
+// the Cypress process. OCR failures are logged but never affect Cypress exit code.
+function spawnOcrReport(pendingOcrFile, excelFile) {
+  const { readManifest } = require("./src/tasks/ocrTasks");
+  const manifest = readManifest(pendingOcrFile);
+  if (!manifest || !Array.isArray(manifest.items) || manifest.items.length === 0) {
+    return;
+  }
+
+  const scriptPath = path.join(__dirname, "scripts", "snapshot-ocr-report.js");
+  const excelPath = (manifest.dirs && manifest.dirs.excelFile) || excelFile;
+
+  console.log(
+    `[snapshot-reporter] Running OCR report (${manifest.items.length} pending)...`
+  );
+
+  let result;
+  try {
+    result = spawnSync(process.execPath, [scriptPath, pendingOcrFile], {
+      stdio: "inherit",
+      env: process.env,
+    });
+  } catch (e) {
+    console.warn(`[snapshot-reporter] OCR report failed: ${e.message}`);
+    return;
+  }
+
+  if (result.error) {
+    console.warn(`[snapshot-reporter] OCR report failed to start: ${result.error.message}`);
+    return;
+  }
+
+  if (result.status === 0) {
+    console.log(`[snapshot-reporter] OCR report complete. Excel: ${excelPath}`);
+  } else {
+    console.warn(
+      `[snapshot-reporter] OCR report exited with code ${result.status} (Cypress exit code unaffected)`
+    );
+  }
+}
+
 function configSnapshot(on, config, options = {}) {
   const root = config.projectRoot || process.cwd();
   const dir = path.join(root, "cypress", "snapshots");
@@ -42,13 +105,9 @@ function configSnapshot(on, config, options = {}) {
   const excelFile = options.excelFile || path.join(reportsDir, "diff-report.xlsx");
   const pendingOcrFile = options.pendingOcrFile || path.join(reportsDir, "pending-ocr.json");
 
-  // OCR execution mode:
-  //   "deferred" (default) — Cypress only does the pixel compare and records
-  //     diffs to pending-ocr.json; OCR runs afterwards via
-  //     `node scripts/snapshot-ocr-report.js`. This keeps the Tesseract WASM
-  //     core (which can crash on Node 24) out of the Cypress process.
-  //   "inline" — legacy behaviour: OCR runs during the Cypress run.
-  const ocrMode = options.snapshotOcrMode === "inline" ? "inline" : "deferred";
+  const ocrMode = resolveOcrMode(options.snapshotOcrMode);
+  // Interactive (`cypress open`) never fires `after:run`, so auto-OCR cannot run.
+  const isInteractive = config.isInteractive === true;
 
   [baselineDir, actualDir, diffDir, reportsDir].forEach(d => {
     if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
@@ -99,15 +158,14 @@ function configSnapshot(on, config, options = {}) {
     pendingFile: pendingOcrFile,
   });
 
-  // Start each run with a clean manifest so the post-run report only reflects
-  // this run's diffs.
-  if (ocrMode === "deferred") {
-    ocrTasks.initPendingManifest();
-  }
+  // Both modes record diffs during the run; start with a clean manifest.
+  ocrTasks.initPendingManifest();
 
   on("task", {
     compareSnapshot: snapshotTasks.compareSnapshot,
     updateBaseline: snapshotTasks.updateBaseline,
+    // Kept for advanced/manual cy.task use; matchSnapshot never calls this
+    // (OCR always runs outside the Cypress test process).
     ocrDiffRegions: ocrTasks.ocrDiffRegions,
     recordPendingOcr: ocrTasks.recordPendingOcr,
   });
@@ -122,6 +180,10 @@ function configSnapshot(on, config, options = {}) {
   // fires in `cypress run` but not in interactive `cypress open`.
   on("after:run", () => {
     removeDir(tempDir);
+
+    if (ocrMode === "after") {
+      spawnOcrReport(pendingOcrFile, excelFile);
+    }
   });
 
   const width = options.browserWidth || 1280;
@@ -140,12 +202,25 @@ function configSnapshot(on, config, options = {}) {
   });
 
   console.log(`[snapshot-reporter] Baseline: ${baselineDir}`);
-  console.log(`[snapshot-reporter] OCR mode: ${ocrMode}` +
-    (ocrMode === "deferred"
-      ? " (run `node scripts/snapshot-ocr-report.js` after the run to build the OCR report)"
-      : ""));
+  if (ocrMode === "after") {
+    console.log(
+      `[snapshot-reporter] OCR mode: after (default) — pixel compare during the run; ` +
+        `Excel report auto-generated after cypress run when diffs are pending`
+    );
+    if (isInteractive) {
+      console.log(
+        `[snapshot-reporter] Interactive mode (cypress open): after:run does not fire, ` +
+          `so OCR will not auto-run. After your session, run: npx cypress-snapshot-ocr-report`
+      );
+    }
+  } else {
+    console.log(
+      `[snapshot-reporter] OCR mode: deferred — pixel compare during the run; ` +
+        `OCR is NOT auto-run. After cypress run, execute: npx cypress-snapshot-ocr-report`
+    );
+  }
 
   return config;
 }
 
-module.exports = { configSnapshot };
+module.exports = { configSnapshot, resolveOcrMode };

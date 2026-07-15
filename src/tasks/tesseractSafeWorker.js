@@ -7,7 +7,7 @@
  * probing CPU/WASM features with `wasm-feature-detect`. On Node 24 the V8
  * `WebAssembly.validate()` check reports relaxed-SIMD support as available, so
  * tesseract loads the relaxed-SIMD core — which then aborts at runtime with a
- * `DotProductSSE` WASM error, killing the whole process (and, when run inline,
+ * `DotProductSSE` WASM error, killing the whole process (and, if run inside Cypress,
  * Cypress with it).
  *
  * The node worker ignores the `corePath` option entirely, so the only reliable

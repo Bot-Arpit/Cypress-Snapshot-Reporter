@@ -33,13 +33,23 @@ function toReportPath(baseDir, snapshotName) {
   return `${base}/${name}.png`;
 }
 
+/** Normalize OCR mode; legacy "inline" and unknowns map to "after". */
+function resolveCommandOcrMode(raw) {
+  if (raw === "deferred") return "deferred";
+  if (raw === "after" || raw === undefined || raw === null) return "after";
+  // "inline" and anything else → after (OCR never runs inside the test process)
+  return "after";
+}
+
 Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, name, options = {}) => {
   const threshold = options.threshold ?? Cypress.env("snapshotThreshold") ?? 0.1;
   const failOnDiff = options.failOnDiff ?? Cypress.env("failOnSnapshotDiff") ?? false;
   const runOcr = options.runOcr ?? true;
-  // "deferred" (default): record diffs now, run OCR after the Cypress run.
-  // "inline": run OCR during the test (legacy; can crash the WASM core on Node 24).
-  const ocrMode = options.ocrMode ?? Cypress.env("snapshotOcrMode") ?? "deferred";
+  // Both "after" and "deferred" only record pending OCR here — never run Tesseract
+  // inside the Cypress test process (avoids Node 24 WASM crashes).
+  const ocrMode = resolveCommandOcrMode(
+    options.ocrMode ?? Cypress.env("snapshotOcrMode") ?? "after"
+  );
   const autoUpdate = options.updateBaseline ?? Cypress.env("snapshotUpdateBaseline") ?? false;
   const diffDir = options.diffDir ?? Cypress.env("snapshotDiffDir") ?? "cypress/snapshots/diff";
   const screenshotTimeout =
@@ -104,10 +114,9 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
       addContext("Diff Image", toReportPath(diffDir, safeName));
     }
 
-    if (hasDiff && runOcr && ocrMode === "deferred") {
-      // Defer OCR: only record the diff now. The heavy (and on Node 24
-      // crash-prone) Tesseract pass runs after the Cypress run via
-      // `node scripts/snapshot-ocr-report.js`.
+    if (hasDiff && runOcr) {
+      // Record only — OCR runs after the Cypress process (mode "after") or via
+      // `npx cypress-snapshot-ocr-report` (mode "deferred").
       cy.task("recordPendingOcr", {
         name: safeName,
         mismatch: result.mismatch,
@@ -115,30 +124,16 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
         severity: result.severity,
         mismatchPercent: result.mismatchPercent,
       }).then((rec) => {
-        cy.log(`[ocr] deferred (${rec.pending} pending) — run snapshot-ocr-report after the run`);
-        addContext("OCR", `Deferred [${result.severity}] — processed after the run`);
-      });
-    }
-
-    if (hasDiff && runOcr && ocrMode === "inline") {
-      cy.task("ocrDiffRegions", {
-        name: safeName,
-        mismatch: result.mismatch,
-        totalPixels: result.totalPixels,
-        severity: result.severity,
-      }).then((ocr) => {
-        cy.log(`[ocr] ${ocr.status}`);
-
-        if (ocr.status === "success") {
-          cy.log(`[ocr] ${ocr.regionsProcessed} regions → ${ocr.excelPath}`);
-          ocr.results.forEach((r, i) => {
-            addContext(`Region ${i + 1} [${result.severity}]`, `${r.contentType} | ${r.confidence}%`);
-            addContext(`Region ${i + 1} Baseline`, r.baselineText || "(no text)");
-            addContext(`Region ${i + 1} Actual`, r.actualText || "(no text)");
-          });
-          addContext("Excel Report", ocr.excelPath);
+        if (ocrMode === "deferred") {
+          cy.log(
+            `[ocr] deferred (${rec.pending} pending) — run npx cypress-snapshot-ocr-report after the run`
+          );
+          addContext("OCR", `Deferred [${result.severity}] — run cypress-snapshot-ocr-report manually`);
         } else {
-          addContext("OCR", ocr.status);
+          cy.log(
+            `[ocr] recorded (${rec.pending} pending) — Excel report auto-runs after cypress run`
+          );
+          addContext("OCR", `Pending [${result.severity}] — processed after the run`);
         }
       });
     }

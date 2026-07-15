@@ -1,170 +1,132 @@
 # cypress-snapshot-reporter
 
-Simple visual snapshot testing for Cypress with pixel diff, optional OCR, and Excel reporting.
+Visual regression for Cypress: pixelmatch diffs, severity, OCR text compare, Excel report. Works offline.
 
-## Install
+**Requires:** Node ≥ 16 · Cypress ≥ 13 · `npm i -D cypress-snapshot-reporter`
 
-```bash
-npm install --save-dev cypress-snapshot-reporter
-```
+---
 
-## Quick Setup
+## Setup
 
-### `cypress.config.js`
+**`cypress.config.js`**
 
 ```js
 const { defineConfig } = require("cypress");
 const { configSnapshot } = require("cypress-snapshot-reporter/plugin");
 
 module.exports = defineConfig({
-  screenshotsFolder: "cypress/snapshots/actual",
   e2e: {
     setupNodeEvents(on, config) {
       config = configSnapshot(on, config, {
-        updateBaseline: false,
-        snapshotOcrMode: "deferred", // OCR runs AFTER the run (default)
+        snapshotOcrMode: "after", // default
+        browserWidth: 1280,
+        browserHeight: 800,
       });
-      return config; // REQUIRED — see note below
+      return config; // REQUIRED
     },
   },
 });
 ```
 
-### Run tests, then build the OCR report
-
-In the default `"deferred"` OCR mode, `cypress run` performs only the fast pixel
-compare and records each diff to `cypress/snapshots/reports/pending-ocr.json`.
-OCR then runs in a **separate** Node process afterwards. Chain the two steps in
-an npm script:
-
-```json
-{
-  "scripts": {
-    "snapshot:run": "cypress run && node node_modules/cypress-snapshot-reporter/scripts/snapshot-ocr-report.js"
-  }
-}
-```
-
-Or use the bundled bin directly:
-
-```bash
-cypress run && npx cypress-snapshot-ocr-report
-```
-
-Why deferred? Tesseract's WASM core can crash the process on Node 24 (a
-relaxed-SIMD `DotProductSSE` abort). Running OCR after the Cypress run keeps that
-crash-prone core out of the Cypress process. OCR stays fully enabled — the post-
-run script pins a safe WASM core and wraps every recognition in `try/catch`, so a
-failing image degrades gracefully instead of failing the pipeline.
-
-To keep the old inline behaviour (OCR during the run), set
-`snapshotOcrMode: "inline"`.
-
-> **You MUST `return config`.** `configSnapshot` redirects screenshots to an
-> internal temp folder by setting `config.screenshotsFolder`. Cypress only
-> applies that change if your `setupNodeEvents` returns the (possibly modified)
-> `config` object. If you forget, Cypress writes screenshots to the default
-> `cypress/screenshots/` folder and you may see errors like
-> `Screenshot not found: "<name>"`. Always assign the return value back and
-> return it:
->
-> ```js
-> setupNodeEvents(on, config) {
->   config = configSnapshot(on, config);
->   return config;
-> }
-> ```
->
-> (The plugin also falls back to searching `cypress/screenshots/` and uses the
-> exact saved screenshot path, so it is resilient — but returning `config`
-> keeps captures out of your repo's default screenshots folder.)
-
-### Do not register your own `before:browser:launch`
-
-`configSnapshot` registers a `before:browser:launch` handler to size the
-browser window. Cypress keeps only **one** such handler, so adding your own in
-`setupNodeEvents` will silently override the plugin's and break window sizing.
-Set the window size with the `browserWidth` / `browserHeight` options instead:
-
-```js
-configSnapshot(on, config, { browserWidth: 1280, browserHeight: 800 });
-```
-
-### `cypress/support/e2e.js`
+**`cypress/support/e2e.js`**
 
 ```js
 import "cypress-snapshot-reporter/commands";
 ```
 
-## Use In Test
+**Test**
 
 ```js
-cy.matchSnapshot("Report/Home");
+cy.matchSnapshot("Home/Header");
+cy.get(".chart").matchSnapshot("Dashboard/Chart"); // element only
 ```
 
-## Main Options
+**Run:** `npx cypress run`  
+First call creates the baseline. Later calls compare; diffs write a side-by-side PNG and (default OCR mode) `diff-report.xlsx` after the run.
 
-`configSnapshot(on, config, options)`
+---
 
-- `baselineDir` (default: `cypress/snapshots/baseline`)
-- `actualDir` (default: `cypress/snapshots/actual`)
-- `diffDir` (default: `cypress/snapshots/diff`)
-- `excelFile` (default: `cypress/snapshots/reports/diff-report.xlsx`)
-- `pendingOcrFile` (default: `cypress/snapshots/reports/pending-ocr.json`) manifest of diffs awaiting OCR (deferred mode)
-- `snapshotOcrMode` (default: `"deferred"`) `"deferred"` runs OCR after the run via `scripts/snapshot-ocr-report.js`; `"inline"` runs it during the run
-- `updateBaseline` (default: `false`) auto-update baseline after compare
-- `browserWidth` (default: `1280`) window width via `before:browser:launch`
-- `browserHeight` (default: `800`) window height via `before:browser:launch`
-- `screenshotTimeout` (default: `5000`) ms to wait for the captured PNG
-
-`cy.matchSnapshot(name, options)`
-
-- `threshold` (default: `0.1`)
-- `failOnDiff` (default: `false`)
-- `runOcr` (default: `true`)
-- `ocrMode` (optional) per-call override of `snapshotOcrMode` (`"deferred"` | `"inline"`)
-- `updateBaseline` (default: `false`) per-call override
-- `diffDir` (optional) per-call diff path for reporter link
-- `capture` (default: `"fullPage"`) Cypress capture mode (`"fullPage"`,
-  `"viewport"`, or `"runner"`)
-- `screenshotTimeout` (optional) per-call override
-
-### Capturing a single element
-
-`matchSnapshot` accepts an optional chained subject. When you chain it off an
-element, only that element is captured (instead of the full page). This is
-useful on very large viewports where full-page stitching can silently produce
-no file:
-
-```js
-cy.get(".chart").matchSnapshot("Dashboard/Chart");
-```
-
-## Baseline Update
-
-Manual baseline update:
-
-```js
-cy.task("updateBaseline", { name: "Report/Home" });
-```
-
-Auto baseline update (global):
-
-```js
-configSnapshot(on, config, { updateBaseline: true });
-```
-
-## Output Folders
+## Output
 
 ```text
 cypress/snapshots/
-  baseline/   (baseline)
-  actual/     (latest run)
-  diff/       (generated only when real diff exists)
-  reports/    (diff-report.xlsx, pending-ocr.json)
+  baseline/   # commit these
+  actual/     # latest captures
+  diff/       # side-by-side (baseline | diff | actual) when mismatch ≥ 10px
+  reports/    # pending-ocr.json, diff-report.xlsx
 ```
 
-## Requirements
+Ignore `actual/`, `diff/`, `reports/`, `.csr-temp/`.
 
-- Node.js >= 16
-- Cypress >= 13
+---
+
+## OCR modes
+
+OCR never runs inside the Cypress test process.
+
+| Mode | Behavior |
+|------|----------|
+| `"after"` **(default)** | Record diffs → auto Excel via `after:run` after `cypress run` |
+| `"deferred"` | Record only → run `npx cypress-snapshot-ocr-report` yourself |
+
+`after:run` does **not** fire in `cypress open` — use the CLI for Excel. OCR failures never fail Cypress. Legacy `"inline"` → `"after"` (warned).
+
+---
+
+## Options
+
+**`configSnapshot(on, config, opts)`**
+
+| Option | Default | |
+|--------|---------|---|
+| `baselineDir` / `actualDir` / `diffDir` | `cypress/snapshots/{baseline,actual,diff}` | |
+| `excelFile` | `…/reports/diff-report.xlsx` | |
+| `pendingOcrFile` | `…/reports/pending-ocr.json` | |
+| `snapshotOcrMode` | `"after"` | `"after"` \| `"deferred"` |
+| `updateBaseline` | `false` | auto-promote actual → baseline |
+| `browserWidth` / `browserHeight` | `1280` / `800` | Electron window |
+| `screenshotTimeout` | `5000` | ms wait for PNG |
+
+**`cy.matchSnapshot(name, opts)`**
+
+| Option | Default | |
+|--------|---------|---|
+| `threshold` | `0.1` | pixelmatch sensitivity |
+| `failOnDiff` | `false` | throw on real mismatch |
+| `runOcr` | `true` | queue for Excel/OCR |
+| `ocrMode` | plugin | `"after"` \| `"deferred"` |
+| `updateBaseline` | `false` | |
+| `capture` | `"fullPage"` | `"fullPage"` \| `"viewport"` \| `"runner"` |
+| `screenshotTimeout` | `5000` | |
+
+Env overrides: `snapshotThreshold`, `failOnSnapshotDiff`, `snapshotUpdateBaseline`, `snapshotScreenshotTimeout`.
+
+**Baselines:** missing file → create. Or `cy.task("updateBaseline", { name })` / `updateBaseline: true`.
+
+---
+
+## Compare results
+
+| Status | Meaning |
+|--------|---------|
+| `baseline_created` | Saved as new baseline |
+| `matched` | 0 px diff |
+| `noise_ignored` | &lt; 10 px — no diff file |
+| `compared` | Real diff + severity |
+| `size_mismatch` | Size differs &gt; 5px — no pixel compare |
+
+**Severity** (% of image mismatched): Critical &gt;2% · High &gt;0.5% · Medium &gt;0.05% · else Low.
+
+---
+
+## Pitfalls
+
+1. **`return config`** — otherwise screenshots miss the temp folder → `Screenshot not found`.
+2. **No second `before:browser:launch`** — Cypress keeps one; yours overrides window size. Use `browserWidth` / `browserHeight`.
+3. **CI:** `"after"` needs only `cypress run`. `"deferred"` → `cypress run && npx cypress-snapshot-ocr-report`.
+
+---
+
+## License
+
+[ISC](./LICENSE)
