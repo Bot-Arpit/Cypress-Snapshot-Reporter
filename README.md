@@ -1,26 +1,44 @@
 # cypress-snapshot-reporter
 
-<p align="center">
-  <a href="https://github.com/Bot-Arpit/Cypress-Snapshot-Reporter">
-    <img src="https://img.shields.io/badge/GitHub-Bot--Arpit%2FCypress--Snapshot--Reporter-181717?style=for-the-badge&logo=github" alt="GitHub" />
-  </a>
-  <img src="https://img.shields.io/badge/Cypress-%3E%3D%2013-17202C?style=for-the-badge&logo=cypress&logoColor=white" alt="Cypress" />
-  <img src="https://img.shields.io/badge/Node-%3E%3D%2016-339933?style=for-the-badge&logo=node.js&logoColor=white" alt="Node" />
-  <img src="https://img.shields.io/badge/license-ISC-0E8A16?style=for-the-badge" alt="License" />
-  <img src="https://img.shields.io/badge/OCR-offline-6F42C1?style=for-the-badge" alt="Offline OCR" />
-</p>
+[![GitHub](https://img.shields.io/badge/GitHub-Bot--Arpit%2FCypress--Snapshot--Reporter-181717?logo=github)](https://github.com/Bot-Arpit/Cypress-Snapshot-Reporter)
+[![npm](https://img.shields.io/badge/npm-cypress--snapshot--reporter-CB3837?logo=npm)](https://www.npmjs.com/package/cypress-snapshot-reporter)
+[![Node](https://img.shields.io/badge/Node.js-%3E%3D%2016-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![Cypress](https://img.shields.io/badge/Cypress-%3E%3D%2013-17202C?logo=cypress&logoColor=white)](https://www.cypress.io)
+[![License](https://img.shields.io/badge/License-ISC-0E8A16)](./LICENSE)
 
-<p align="center">
-  <b>Visual regression for Cypress</b> — pixel diffs · severity · offline OCR · Excel reports
-</p>
+Take screenshots in Cypress, compare them to a saved baseline, and get a clear report when something looks different.
 
-<p align="center">
-  <a href="https://github.com/Bot-Arpit/Cypress-Snapshot-Reporter">github.com/Bot-Arpit/Cypress-Snapshot-Reporter</a>
-</p>
+Works **fully offline** — pixel compare, OCR, and Excel.
 
 ---
 
-## Quick start
+## Contents
+
+- [What it does](#what-it-does)
+- [Get started](#get-started)
+- [Write a test](#write-a-test)
+- [Where files are saved](#where-files-are-saved)
+- [Excel report](#excel-report)
+- [Options](#options)
+- [Results & severity](#results--severity)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+---
+
+## What it does
+
+| Step | Action |
+|:----:|--------|
+| **1** | First run saves a **baseline** image |
+| **2** | Later runs **compare** the new screenshot to that baseline |
+| **3** | If they differ → side-by-side **diff** + optional **Excel** report |
+
+Snapshots are stored **per spec file name**, so different specs never overwrite each other.
+
+---
+
+## Get started
 
 ### 1. Install
 
@@ -40,13 +58,13 @@ module.exports = defineConfig({
   e2e: {
     setupNodeEvents(on, config) {
       config = configSnapshot(on, config);
-      return config; // required
+      return config; // required — do not remove
     },
   },
 });
 ```
 
-### 3. Import commands
+### 3. Load the command
 
 **File:** `cypress/support/e2e.js`
 
@@ -54,49 +72,49 @@ module.exports = defineConfig({
 import "cypress-snapshot-reporter/commands";
 ```
 
-### 4. Use in tests
+> **Important:** Always `return config` from `setupNodeEvents`.  
+> Skipping this causes `Screenshot not found`.
+
+---
+
+## Write a test
 
 ```js
+// Full page
 cy.matchSnapshot("Home/Header");
+
+// One element only
 cy.get(".chart").matchSnapshot("Dashboard/Chart");
+
+// Fail the test if the image changed
 cy.matchSnapshot("Login", { failOnDiff: true });
 ```
 
-### 5. Run
+Run:
 
 ```bash
 npx cypress run
 ```
 
-> [!IMPORTANT]
-> Always `return config` from `setupNodeEvents`. Skipping this causes `Screenshot not found`.
-
 ---
 
-## Output layout
-
-| Folder | Purpose | Git |
-|--------|---------|-----|
-| `baseline/` | Reference images | Commit |
-| `actual/` | Latest captures | Ignore |
-| `diff/` | Side-by-side diffs | Ignore |
-| `reports/` | Excel + OCR manifest | Ignore |
+## Where files are saved
 
 ```text
 cypress/snapshots/
-├── baseline/<spec>/<name>.png
-├── actual/<spec>/<name>.png
-├── diff/<spec>/<name>.png
-└── reports/diff-report.xlsx
+├── baseline/     ← commit these (your “good” images)
+├── actual/       ← latest screenshots
+├── diff/         ← side-by-side when something changed
+└── reports/      ← Excel report
 ```
 
-Example — `cy.matchSnapshot("Home/Header")` in `login.cy.js`:
+**Example**
 
-```text
-baseline/login.cy/Home/Header.png
-```
+| Spec | Command | Saved as |
+|------|---------|----------|
+| `login.cy.js` | `cy.matchSnapshot("Home/Header")` | `baseline/login.cy/Home/Header.png` |
 
-Add to `.gitignore`:
+**`.gitignore`**
 
 ```gitignore
 cypress/snapshots/actual/
@@ -107,35 +125,23 @@ cypress/.csr-temp/
 
 ---
 
-## Capture behavior
+## Excel report
 
-| Step | What happens |
-|------|----------------|
-| 1 | Measure page width |
-| 2 | Expand viewport to full width (no horizontal crop) |
-| 3 | Take a full-page screenshot (scrolls vertically) |
+By default, after `cypress run` the plugin builds an Excel file that explains text changes in the diffs (OCR).
 
-Wide and tall pages are both covered automatically.
-
----
-
-## Excel & OCR
-
-| Mode | When Excel is created |
-|------|------------------------|
-| `after` (default) | Automatically after `cypress run` |
-| `deferred` | Run the CLI yourself |
+| Mode | Badge | Behavior |
+|------|-------|----------|
+| `after` | default | Auto Excel after `cypress run` |
+| `deferred` | manual | You run the CLI yourself |
 
 ```bash
 npx cypress-snapshot-ocr-report
 ```
 
-> [!NOTE]
-> In `cypress open`, Excel is never auto-generated — use the CLI above.
+> **Note:** In `cypress open`, Excel is **not** created automatically.  
+> Run the command above after your session.
 
-OCR failures are logged but **never fail** your Cypress run.
-
-### CI (deferred mode)
+**CI (deferred mode)**
 
 ```bash
 npx cypress run && npx cypress-snapshot-ocr-report
@@ -145,64 +151,64 @@ npx cypress run && npx cypress-snapshot-ocr-report
 
 ## Options
 
-### Plugin — `configSnapshot(on, config, opts)`
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `browserWidth` | `1280` | Browser / viewport width |
-| `browserHeight` | `800` | Browser / viewport height |
-| `snapshotOcrMode` | `"after"` | `"after"` or `"deferred"` |
-| `updateBaseline` | `false` | Auto-update all baselines |
-
-Example:
+### Plugin
 
 ```js
 config = configSnapshot(on, config, {
   browserWidth: 1280,
   browserHeight: 800,
-  snapshotOcrMode: "after",
+  snapshotOcrMode: "after", // or "deferred"
+  updateBaseline: false,
 });
 ```
 
-### Command — `cy.matchSnapshot(name, opts?)`
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `browserWidth` | `1280` | Browser width |
+| `browserHeight` | `800` | Browser height |
+| `snapshotOcrMode` | `"after"` | When Excel is created |
+| `updateBaseline` | `false` | Auto-replace baselines |
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `failOnDiff` | `false` | Fail the test on a real mismatch |
-| `threshold` | `0.1` | Pixelmatch sensitivity (`0`–`1`) |
-| `updateBaseline` | `false` | Update baseline for this snapshot |
-| `runOcr` | `true` | Include this diff in the Excel report |
-
-Example:
+### Command
 
 ```js
 cy.matchSnapshot("Login", {
   failOnDiff: true,
   threshold: 0.1,
   updateBaseline: false,
+  runOcr: true,
 });
 ```
 
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `failOnDiff` | `false` | Fail test if images differ |
+| `threshold` | `0.1` | Compare sensitivity (`0`–`1`) |
+| `updateBaseline` | `false` | Update this baseline |
+| `runOcr` | `true` | Include in Excel report |
+
 ---
 
-## Compare results
+## Results & severity
+
+### Status
 
 | Status | Meaning |
 |--------|---------|
-| `baseline_created` | New baseline saved |
-| `matched` | No visual difference |
-| `noise_ignored` | Tiny diff (&lt; 10 px) ignored |
-| `compared` | Real diff — severity assigned |
-| `size_mismatch` | Image sizes differ too much |
+| `baseline_created` | No baseline yet — one was saved |
+| `matched` | Looks the same |
+| `noise_ignored` | Tiny change (&lt; 10 px) — ignored |
+| `compared` | Real difference found |
+| `size_mismatch` | Different image sizes — skipped |
 
-### Severity scale
+### Severity
 
-| Level | Badge | Mismatch |
-|-------|-------|----------|
-| Critical | ![Critical](https://img.shields.io/badge/Critical-%3E%202%25-b60205) | &gt; 2% of pixels |
-| High | ![High](https://img.shields.io/badge/High-%3E%200.5%25-d93f0b) | &gt; 0.5% |
-| Medium | ![Medium](https://img.shields.io/badge/Medium-%3E%200.05%25-fbca04) | &gt; 0.05% |
-| Low | ![Low](https://img.shields.io/badge/Low-else-0e8a16) | Everything else |
+| Level | When |
+|-------|------|
+| **Critical** | &gt; 2% of pixels changed |
+| **High** | &gt; 0.5% |
+| **Medium** | &gt; 0.05% |
+| **Low** | smaller than that |
 
 ---
 
@@ -210,10 +216,10 @@ cy.matchSnapshot("Login", {
 
 | Problem | Fix |
 |---------|-----|
-| `Screenshot not found` | `return config` from `setupNodeEvents` |
-| Cropped / wrong size | Set `browserWidth` / `browserHeight` — do not add another `before:browser:launch` |
-| No Excel in CI (`deferred`) | Run the CI command in the Excel section above |
-| Specs overwriting images | Paths are scoped per spec name automatically |
+| `Screenshot not found` | `return config` in `setupNodeEvents` |
+| Image looks cropped | Set `browserWidth` / `browserHeight` — don’t add your own `before:browser:launch` |
+| No Excel after `cypress open` | Run `npx cypress-snapshot-ocr-report` |
+| Specs overwrite each other | Files are already split by **spec name** — also use unique snapshot names |
 
 ---
 
