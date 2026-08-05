@@ -113,6 +113,27 @@ function configSnapshot(on, config, options = {}) {
     if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
   });
 
+  // Keep Cypress viewport and browser window in sync so screenshots are not
+  // cropped to a smaller window than the configured viewport.
+  const width = options.viewportWidth ?? options.browserWidth ?? 1280;
+  const height = options.viewportHeight ?? options.browserHeight ?? 800;
+  const maxViewportWidth = options.maxViewportWidth ?? 8192;
+  const maxViewportHeight = options.maxViewportHeight ?? 8192;
+  const fitToPage = options.fitToPage ?? true;
+  config.viewportWidth = width;
+  config.viewportHeight = height;
+
+  // Browser window must be >= the viewport used for captures, or Chrome/Electron
+  // clips screenshots. Cap launch size so Electron can still open reliably.
+  const LAUNCH_WIDTH_CAP = 3840;
+  const LAUNCH_HEIGHT_CAP = 2160;
+  const launchWidth = fitToPage
+    ? Math.max(width, Math.min(maxViewportWidth, LAUNCH_WIDTH_CAP))
+    : width;
+  const launchHeight = fitToPage
+    ? Math.max(height, Math.min(maxViewportHeight, LAUNCH_HEIGHT_CAP))
+    : height;
+
   config.env = config.env || {};
   config.env.snapshotBaselineDir = baselineDir;
   config.env.snapshotActualDir = actualDir;
@@ -122,6 +143,14 @@ function configSnapshot(on, config, options = {}) {
   config.env.snapshotOcrMode = ocrMode;
   config.env.snapshotUpdateBaseline = options.updateBaseline ?? false;
   config.env.snapshotScreenshotTimeout = options.screenshotTimeout ?? 5000;
+  config.env.snapshotViewportWidth = width;
+  config.env.snapshotViewportHeight = height;
+  config.env.snapshotCapture = options.capture ?? "fullPage";
+  config.env.snapshotFitToPage = fitToPage;
+  config.env.snapshotMaxViewportWidth = maxViewportWidth;
+  config.env.snapshotMaxViewportHeight = maxViewportHeight;
+  config.env.snapshotLaunchWidth = launchWidth;
+  config.env.snapshotLaunchHeight = launchHeight;
 
   // Remember where Cypress would write screenshots BEFORE we override it. If the
   // user does not `return config` from setupNodeEvents, our override below is
@@ -186,22 +215,34 @@ function configSnapshot(on, config, options = {}) {
     }
   });
 
-  const width = options.browserWidth || 1280;
-  const height = options.browserHeight || 800;
-
   // NOTE: Cypress only keeps ONE `before:browser:launch` handler. Registering a
   // second one in your own setupNodeEvents silently overrides this one (and
-  // therefore the browserWidth/browserHeight sizing). Configure window size via
-  // the `browserWidth`/`browserHeight` options instead of adding your own.
+  // therefore the window/viewport sizing). Configure size via
+  // browserWidth/browserHeight (or viewportWidth/viewportHeight) instead.
   on("before:browser:launch", (browser, launchOptions) => {
     if (browser.name === "electron") {
-      launchOptions.preferences.width = width;
-      launchOptions.preferences.height = height;
+      launchOptions.preferences = launchOptions.preferences || {};
+      launchOptions.preferences.width = launchWidth;
+      launchOptions.preferences.height = launchHeight;
     }
+
+    // Chromium family (Chrome, Edge, Electron headless args) — window must be
+    // at least as large as the viewport or screenshots get cropped.
+    if (browser.family === "chromium" && Array.isArray(launchOptions.args)) {
+      launchOptions.args = launchOptions.args.filter(
+        (arg) => typeof arg !== "string" || !arg.startsWith("--window-size=")
+      );
+      launchOptions.args.push(`--window-size=${launchWidth},${launchHeight}`);
+    }
+
     return launchOptions;
   });
 
   console.log(`[snapshot-reporter] Baseline: ${baselineDir}`);
+  console.log(
+    `[snapshot-reporter] Viewport: ${width}×${height}` +
+      (fitToPage ? ` (fit-to-page on, browser window ${launchWidth}×${launchHeight})` : "")
+  );
   if (ocrMode === "after") {
     console.log(
       `[snapshot-reporter] OCR mode: after (default) — pixel compare during the run; ` +

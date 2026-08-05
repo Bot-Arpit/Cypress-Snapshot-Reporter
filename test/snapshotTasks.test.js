@@ -204,6 +204,39 @@ test("prepareImagesForCompare aligns to overlapping top-left region", () => {
   assert.strictEqual(prepareImagesForCompare(img1, img2, 0), null);
 });
 
+// 7. Spec-scoped keys store under nested folders and do not collide.
+test("stores snapshots under nested spec/user path without collision", async () => {
+  const root = makeTempRoot();
+  const baselineDir = path.join(root, "baseline");
+  const actualDir = path.join(root, "actual");
+  const diffDir = path.join(root, "diff");
+  const screenshotsDir = path.join(root, "__temp__");
+
+  const loginShot = path.join(screenshotsDir, "login-Home.png");
+  const dashShot = path.join(screenshotsDir, "dash-Home.png");
+  writePng(loginShot, { fill: 200 });
+  writePng(dashShot, { fill: 50 });
+
+  const { compareSnapshot } = makeSnapshotTasks({
+    baselineDir,
+    actualDir,
+    diffDir,
+    screenshotsDir,
+    screenshotTimeout: 500,
+  });
+
+  const loginKey = "login.cy/Home/Header";
+  const dashKey = "dashboard.cy/Home/Header";
+
+  const r1 = await compareSnapshot({ name: loginKey, screenshotPath: loginShot });
+  const r2 = await compareSnapshot({ name: dashKey, screenshotPath: dashShot });
+
+  assert.strictEqual(r1.status, "baseline_created");
+  assert.strictEqual(r2.status, "baseline_created");
+  assert.ok(fs.existsSync(path.join(baselineDir, "login.cy", "Home", "Header.png")));
+  assert.ok(fs.existsSync(path.join(baselineDir, "dashboard.cy", "Home", "Header.png")));
+});
+
 (async () => {
   let failures = 0;
   for (const { name, fn } of tests) {

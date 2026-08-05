@@ -1,0 +1,9 @@
+# Development-only paths (package.json "files" is the primary allowlist)
+test/
+.github/
+cypress/
+node_modules/
+*.tgz
+*.log
+.env
+.env.*

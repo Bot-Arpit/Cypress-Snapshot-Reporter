@@ -6,14 +6,21 @@ function addContext(title, value) {
   }
 }
 
-const WINDOWS_INVALID_CHARS = /[<>:"|?*]/g;
+const {
+  sanitizeSnapshotName,
+  normalizeSpecRoot,
+  buildSnapshotKey: buildKey,
+} = require("./src/snapshotPath");
+const { computeFitViewportSize } = require("./src/fitViewport");
 
-function sanitizeSnapshotName(name) {
-  return String(name || "")
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\/$/, "")
-    .replace(WINDOWS_INVALID_CHARS, "_");
+function getSpecSnapshotRoot() {
+  const relative =
+    (Cypress.spec && (Cypress.spec.relative || Cypress.spec.name)) || "unknown";
+  return normalizeSpecRoot(relative);
+}
+
+function buildSnapshotKey(name) {
+  return buildKey(getSpecSnapshotRoot(), name);
 }
 
 function warnIfSnapshotNameHasSpaces(name) {
@@ -37,16 +44,193 @@ function toReportPath(baseDir, snapshotName) {
 function resolveCommandOcrMode(raw) {
   if (raw === "deferred") return "deferred";
   if (raw === "after" || raw === undefined || raw === null) return "after";
-  // "inline" and anything else → after (OCR never runs inside the test process)
   return "after";
+}
+
+function resolveBaseViewport(options = {}) {
+  const width =
+    options.viewportWidth ??
+    Cypress.env("snapshotViewportWidth") ??
+    Cypress.config("viewportWidth") ??
+    1280;
+  const height =
+    options.viewportHeight ??
+    Cypress.env("snapshotViewportHeight") ??
+    Cypress.config("viewportHeight") ??
+    800;
+  return { width: Number(width), height: Number(height) };
+}
+
+/**
+ * Expand viewport to the page's full width (removes horizontal scrollbar /
+ * clipping), then keep a usable height so fullPage can scroll vertically.
+ *
+ * Important: never mix sync returns with cy.* commands inside the same .then().
+ */
+function applyFitViewport(options = {}) {
+  const base = resolveBaseViewport(options);
+  const fitToPage =
+    options.fitToPage ??
+    (Cypress.env("snapshotFitToPage") !== false && Cypress.env("snapshotFitToPage") !== "false");
+  const maxWidth = Number(
+    options.maxViewportWidth ?? Cypress.env("snapshotMaxViewportWidth") ?? 8192
+  );
+  const maxHeight = Number(
+    options.maxViewportHeight ?? Cypress.env("snapshotMaxViewportHeight") ?? 8192
+  );
+  // Never request a viewport larger than the launched browser window.
+  const launchWidth = Number(Cypress.env("snapshotLaunchWidth")) || maxWidth;
+  const launchHeight = Number(Cypress.env("snapshotLaunchHeight")) || maxHeight;
+  const effectiveMaxWidth = Math.min(maxWidth, launchWidth);
+  const effectiveMaxHeight = Math.min(maxHeight, launchHeight);
+
+  function verifyApplied({ width, height, fitted }) {
+    return cy.document({ log: false }).then((doc) => {
+      const appliedW = doc.documentElement.clientWidth;
+      const appliedH = doc.documentElement.clientHeight;
+      Cypress.log({
+        name: "snapshot-viewport",
+        message: `${width}×${height}${fitted ? " (fit)" : ""} → actual ${appliedW}×${appliedH}`,
+        consoleProps: () => ({
+          requested: { width, height, fitted },
+          actual: { width: appliedW, height: appliedH },
+          launchWindow: { width: launchWidth, height: launchHeight },
+          configViewport: {
+            width: Cypress.config("viewportWidth"),
+            height: Cypress.config("viewportHeight"),
+          },
+        }),
+      });
+
+      if (Math.abs(appliedW - width) > 2) {
+        Cypress.log({
+          name: "snapshot-viewport-warn",
+          message:
+            `Viewport width not fully applied (wanted ${width}, got ${appliedW}). ` +
+            `Browser window may be too small.`,
+        });
+      }
+    });
+  }
+
+  if (!fitToPage) {
+    return cy
+      .viewport(base.width, base.height)
+      .then(() => verifyApplied({ width: base.width, height: base.height, fitted: false }));
+  }
+
+  return cy
+    .document({ log: false })
+    .then((doc) => {
+      const el = doc.documentElement;
+      const body = doc.body || el;
+      const pageWidth = Math.max(
+        el.scrollWidth || 0,
+        el.clientWidth || 0,
+        body.scrollWidth || 0,
+        body.clientWidth || 0,
+        base.width
+      );
+      const pageHeight = Math.max(
+        el.clientHeight || 0,
+        body.clientHeight || 0,
+        base.height
+      );
+
+      return computeFitViewportSize({
+        baseWidth: base.width,
+        baseHeight: base.height,
+        pageWidth,
+        pageHeight,
+        maxWidth: effectiveMaxWidth,
+        maxHeight: effectiveMaxHeight,
+        fitToPage: true,
+      });
+    })
+    .then((size) => cy.viewport(size.width, size.height).then(() => size))
+    .then((size) => verifyApplied(size));
+}
+
+function handleCompareResult(result, {
+  snapshotKey,
+  diffDir,
+  runOcr,
+  ocrMode,
+  autoUpdate,
+  failOnDiff,
+  screenshotTimeout,
+}) {
+  cy.log(
+    `[snapshot] ${result.name} → ${result.status}` +
+      (result.severity ? ` | ${result.severity}` : "") +
+      (result.mismatchPercent ? ` | ${result.mismatchPercent}` : "")
+  );
+
+  if (result.status === "baseline_created") {
+    addContext("Snapshot", `Baseline created: ${snapshotKey}`);
+  }
+
+  if (result.status === "size_mismatch") {
+    addContext(
+      "Size Mismatch",
+      `${result.baseline.width}×${result.baseline.height} vs ${result.actual.width}×${result.actual.height}`
+    );
+  }
+
+  const hasDiff = result.status === "compared" && result.mismatch > 0;
+
+  if (hasDiff) {
+    addContext(
+      `Severity: ${result.severity}`,
+      `${result.mismatch} pixels (${result.mismatchPercent})`
+    );
+    addContext("Diff Image", toReportPath(diffDir, snapshotKey));
+  }
+
+  if (hasDiff && runOcr) {
+    cy.task("recordPendingOcr", {
+      name: snapshotKey,
+      mismatch: result.mismatch,
+      totalPixels: result.totalPixels,
+      severity: result.severity,
+      mismatchPercent: result.mismatchPercent,
+    }).then((rec) => {
+      if (ocrMode === "deferred") {
+        cy.log(
+          `[ocr] deferred (${rec.pending} pending) — run npx cypress-snapshot-ocr-report after the run`
+        );
+        addContext(
+          "OCR",
+          `Deferred [${result.severity}] — run cypress-snapshot-ocr-report manually`
+        );
+      } else {
+        cy.log(
+          `[ocr] recorded (${rec.pending} pending) — Excel report auto-runs after cypress run`
+        );
+        addContext("OCR", `Pending [${result.severity}] — processed after the run`);
+      }
+    });
+  }
+
+  if (
+    autoUpdate &&
+    ["matched", "noise_ignored", "compared", "size_mismatch"].includes(result.status)
+  ) {
+    cy.task("updateBaseline", { name: snapshotKey, screenshotTimeout }).then(() => {
+      cy.log(`[snapshot] baseline updated: ${snapshotKey}`);
+      addContext("Snapshot", `Updated: ${snapshotKey}`);
+    });
+  }
+
+  if (hasDiff && failOnDiff) {
+    throw new Error(`[${result.severity}] Mismatch "${snapshotKey}": ${result.mismatchPercent}`);
+  }
 }
 
 Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, name, options = {}) => {
   const threshold = options.threshold ?? Cypress.env("snapshotThreshold") ?? 0.1;
   const failOnDiff = options.failOnDiff ?? Cypress.env("failOnSnapshotDiff") ?? false;
   const runOcr = options.runOcr ?? true;
-  // Both "after" and "deferred" only record pending OCR here — never run Tesseract
-  // inside the Cypress test process (avoids Node 24 WASM crashes).
   const ocrMode = resolveCommandOcrMode(
     options.ocrMode ?? Cypress.env("snapshotOcrMode") ?? "after"
   );
@@ -54,21 +238,21 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
   const diffDir = options.diffDir ?? Cypress.env("snapshotDiffDir") ?? "cypress/snapshots/diff";
   const screenshotTimeout =
     options.screenshotTimeout ?? Cypress.env("snapshotScreenshotTimeout") ?? 5000;
-  // `capture` keeps the historical full-page default. When a subject element is
-  // chained, the element is captured directly (Cypress ignores `capture` for
-  // element screenshots), which avoids full-page stitching failures on very
-  // large viewports.
-  const capture = options.capture ?? "fullPage";
+
+  // Always fullPage for page shots so vertical content is included. Width is
+  // handled by expanding the viewport to scrollWidth first (see applyFitViewport).
+  // Explicit capture: "viewport" remains an escape hatch for a fixed frame only.
+  const capture =
+    options.capture ??
+    Cypress.env("snapshotCapture") ??
+    (subject ? "viewport" : "fullPage");
 
   if (!name) throw new Error("matchSnapshot requires a name");
 
   warnIfSnapshotNameHasSpaces(name);
   const safeName = sanitizeSnapshotName(name);
+  const snapshotKey = buildSnapshotKey(name);
 
-  // Capture the EXACT path Cypress writes to via onAfterScreenshot, so the task
-  // never has to guess which folder the screenshot landed in (it differs when
-  // the screenshotsFolder override was not applied because setupNodeEvents did
-  // not `return config`).
   let capturedScreenshotPath = null;
   const screenshotOptions = {
     capture,
@@ -78,76 +262,41 @@ Cypress.Commands.add("matchSnapshot", { prevSubject: "optional" }, (subject, nam
     },
   };
 
-  cy.wait(100);
+  // 1) Grow viewport to full page width (no horizontal crop)
+  // 2) Wait for layout
+  // 3) Capture fullPage (vertical scroll) — or element screenshot
+  // 4) Compare via task
+  applyFitViewport(options);
+  cy.wait(150);
+
   if (subject) {
     cy.wrap(subject).screenshot(safeName, screenshotOptions);
   } else {
     cy.screenshot(safeName, screenshotOptions);
   }
 
-  // Defer building the task payload until after the screenshot has run so the
-  // captured path is populated (command args are evaluated at queue time).
+  // Defer task payload until after screenshot so capturedScreenshotPath is set.
+  // Return the task chain (don't nest cy.task().then inside cy.then(() => ...)).
   cy.then(() =>
     cy.task(
       "compareSnapshot",
-      { name: safeName, screenshotPath: capturedScreenshotPath, threshold, screenshotTimeout },
+      {
+        name: snapshotKey,
+        screenshotPath: capturedScreenshotPath,
+        threshold,
+        screenshotTimeout,
+      },
       { timeout: 30000 }
-    ).then((result) => {
-    cy.log(
-      `[snapshot] ${result.name} → ${result.status}` +
-      (result.severity ? ` | ${result.severity}` : "") +
-      (result.mismatchPercent ? ` | ${result.mismatchPercent}` : "")
-    );
-
-    if (result.status === "baseline_created") {
-      addContext("Snapshot", `Baseline created: ${name}`);
-    }
-
-    if (result.status === "size_mismatch") {
-      addContext("Size Mismatch", `${result.baseline.width}×${result.baseline.height} vs ${result.actual.width}×${result.actual.height}`);
-    }
-
-    const hasDiff = result.status === "compared" && result.mismatch > 0;
-
-    if (hasDiff) {
-      addContext(`Severity: ${result.severity}`, `${result.mismatch} pixels (${result.mismatchPercent})`);
-      addContext("Diff Image", toReportPath(diffDir, safeName));
-    }
-
-    if (hasDiff && runOcr) {
-      // Record only — OCR runs after the Cypress process (mode "after") or via
-      // `npx cypress-snapshot-ocr-report` (mode "deferred").
-      cy.task("recordPendingOcr", {
-        name: safeName,
-        mismatch: result.mismatch,
-        totalPixels: result.totalPixels,
-        severity: result.severity,
-        mismatchPercent: result.mismatchPercent,
-      }).then((rec) => {
-        if (ocrMode === "deferred") {
-          cy.log(
-            `[ocr] deferred (${rec.pending} pending) — run npx cypress-snapshot-ocr-report after the run`
-          );
-          addContext("OCR", `Deferred [${result.severity}] — run cypress-snapshot-ocr-report manually`);
-        } else {
-          cy.log(
-            `[ocr] recorded (${rec.pending} pending) — Excel report auto-runs after cypress run`
-          );
-          addContext("OCR", `Pending [${result.severity}] — processed after the run`);
-        }
-      });
-    }
-
-    if (autoUpdate && ["matched", "noise_ignored", "compared", "size_mismatch"].includes(result.status)) {
-      cy.task("updateBaseline", { name: safeName, screenshotTimeout }).then(() => {
-        cy.log(`[snapshot] baseline updated: ${name}`);
-        addContext("Snapshot", `Updated: ${name}`);
-      });
-    }
-
-    if (hasDiff && failOnDiff) {
-      throw new Error(`[${result.severity}] Mismatch "${name}": ${result.mismatchPercent}`);
-    }
-    })
-  );
+    )
+  ).then((result) => {
+    handleCompareResult(result, {
+      snapshotKey,
+      diffDir,
+      runOcr,
+      ocrMode,
+      autoUpdate,
+      failOnDiff,
+      screenshotTimeout,
+    });
+  });
 });

@@ -1,13 +1,14 @@
 {
   "name": "cypress-snapshot-reporter",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "description": "Cypress plugin for visual pixelmatch testing with pixel-level diff, OCR, severity classification, and Excel + Mochawesome reporting. Works fully offline.",
   "main": "plugin.js",
   "type": "commonjs",
   "exports": {
-    ".":          "./plugin.js",
-    "./plugin":   "./plugin.js",
-    "./commands": "./commands.js"
+    ".":              "./plugin.js",
+    "./plugin":       "./plugin.js",
+    "./commands":     "./commands.js",
+    "./package.json": "./package.json"
   },
   "bin": {
     "cypress-snapshot-ocr-report": "scripts/snapshot-ocr-report.js"
@@ -16,6 +17,8 @@
     "plugin.js",
     "commands.js",
     "scripts/snapshot-ocr-report.js",
+    "src/snapshotPath.js",
+    "src/fitViewport.js",
     "src/tasks/constants.js",
     "src/tasks/snapshotTasks.js",
     "src/tasks/ocrTasks.js",
@@ -25,16 +28,18 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/snapshotTasks.test.js",
+    "test": "node test/snapshotTasks.test.js && node test/snapshotPath.test.js && node test/fitViewport.test.js && node test/plugin.integration.test.js",
     "snapshot:run": "cypress run",
     "snapshot:ocr-report": "node scripts/snapshot-ocr-report.js",
-    "check:artifacts": "node -e \"const fs=require('fs'); const required=['plugin.js','commands.js','scripts/snapshot-ocr-report.js','src/tasks/constants.js','src/tasks/snapshotTasks.js','src/tasks/ocrTasks.js','src/tasks/tesseractSafeWorker.js','src/tessdata/eng.traineddata.gz']; const missing=required.filter((p)=>!fs.existsSync(p)); if(missing.length){throw new Error('Missing required publish artifact(s): '+missing.join(', '));} console.log('Publish artifacts verified.');\"",
-    "check:syntax": "node --check plugin.js && node --check commands.js && node --check src/tasks/snapshotTasks.js && node --check src/tasks/ocrTasks.js && node --check src/tasks/tesseractSafeWorker.js && node --check scripts/snapshot-ocr-report.js",
+    "check:artifacts": "node -e \"const fs=require('fs'); const required=['plugin.js','commands.js','scripts/snapshot-ocr-report.js','src/snapshotPath.js','src/fitViewport.js','src/tasks/constants.js','src/tasks/snapshotTasks.js','src/tasks/ocrTasks.js','src/tasks/tesseractSafeWorker.js','src/tessdata/eng.traineddata.gz']; const missing=required.filter((p)=>!fs.existsSync(p)); if(missing.length){throw new Error('Missing required publish artifact(s): '+missing.join(', '));} console.log('Publish artifacts verified.');\"",
+    "check:syntax": "node --check plugin.js && node --check commands.js && node --check src/snapshotPath.js && node --check src/fitViewport.js && node --check src/tasks/snapshotTasks.js && node --check src/tasks/ocrTasks.js && node --check src/tasks/tesseractSafeWorker.js && node --check scripts/snapshot-ocr-report.js",
+    "check:smoke": "node scripts/check-smoke.js",
     "check:pack": "npm pack --dry-run",
     "audit:prod": "npm audit --omit=dev",
-    "prepublishOnly": "npm run check:artifacts && npm run check:syntax && npm run check:pack && npm run audit:prod"
+    "prepublishOnly": "npm run check:artifacts && npm run check:syntax && npm test && npm run check:smoke && npm run check:pack && npm run audit:prod"
   },
   "keywords": [
+    "cypress-snapshot-reporter",
     "cypress",
     "snapshot",
     "visual-regression",
@@ -51,12 +56,12 @@
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "https://github.com/arpit-kumar/cypress-snapshot-reporter.git"
+    "url": "git+https://github.com/Bot-Arpit/Cypress-Snapshot-Reporter.git"
   },
   "bugs": {
-    "url": "https://github.com/arpit-kumar/cypress-snapshot-reporter/issues"
+    "url": "https://github.com/Bot-Arpit/Cypress-Snapshot-Reporter/issues"
   },
-  "homepage": "https://github.com/arpit-kumar/cypress-snapshot-reporter#readme",
+  "homepage": "https://github.com/Bot-Arpit/Cypress-Snapshot-Reporter#readme",
   "engines": {
     "node": ">=16.0.0"
   },
